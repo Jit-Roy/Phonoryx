@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -49,6 +50,11 @@ from audioflow.models.graph_model import (
     NodeModel,
 )
 from audioflow.ui.canvas import NODE_DRAG_MIME_TYPE
+from audioflow.ui.widget_helpers import (
+    build_device_combo_entries,
+    build_process_combo_entries,
+    virtual_driver_missing_text,
+)
 
 
 class DraggablePaletteList(QListWidget):
@@ -101,11 +107,14 @@ class LeftPalettePanel(QWidget):
 
     add_node_requested = Signal(int, dict)  # NodeType int, kwargs
     refresh_requested = Signal()
+    terminal_toggle_requested = Signal()
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
+        self.setObjectName("PanelBody")
         layout = QVBoxLayout(self)
         layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(6)
 
         hdr = QHBoxLayout()
         hdr.addWidget(QLabel("Studio Sources & Palette"))
@@ -151,6 +160,19 @@ class LeftPalettePanel(QWidget):
         proc_lay.addWidget(QLabel("Drag onto canvas or double-click an app:"))
         proc_lay.addWidget(self.proc_list)
         self.tabs.addTab(proc_widget, "Apps")
+
+        footer = QHBoxLayout()
+        footer.setContentsMargins(0, 2, 0, 0)
+        self.btn_terminal = QToolButton(self)
+        self.btn_terminal.setObjectName("TerminalToggleBtn")
+        self.btn_terminal.setText(">_ Terminal")
+        self.btn_terminal.setCheckable(True)
+        self.btn_terminal.setChecked(True)
+        self.btn_terminal.setToolTip("Toggle Bottom Terminal Panel (Ctrl+`)")
+        self.btn_terminal.clicked.connect(lambda: self.terminal_toggle_requested.emit())
+        footer.addWidget(self.btn_terminal)
+        footer.addStretch()
+        layout.addLayout(footer)
 
         self._processes: List[ProcessInfo] = []
 
@@ -420,23 +442,13 @@ class InspectorPanel(QWidget):
                 "Preserved original ID without switching devices."
             )
             self.lbl_missing_warn.show()
-        elif node.node_type in (
-            NodeType.VIRTUAL_INPUT,
-            NodeType.VIRTUAL_OUTPUT,
-        ):
-            want_flow = DataFlow.CAPTURE if node.node_type == NodeType.VIRTUAL_INPUT else DataFlow.RENDER
-            has_virtual = any(d.is_virtual and d.flow == want_flow for d in self._devices)
-            if not has_virtual:
-                self.lbl_missing_warn.setText(
-                    "No Windows virtual audio driver detected. Install the open-source MIT "
-                    "VirtualDrivers/Virtual-Audio-Driver (or another virtual cable) to expose "
-                    "virtual endpoints to Chrome, Discord, and OBS."
-                )
+        else:
+            warn = virtual_driver_missing_text(node.node_type, self._devices)
+            if warn:
+                self.lbl_missing_warn.setText(warn)
                 self.lbl_missing_warn.show()
             else:
                 self.lbl_missing_warn.hide()
-        else:
-            self.lbl_missing_warn.hide()
 
         needs_proc = node.node_type == NodeType.APP_CAPTURE
         self._set_row_visible(self._row_process, needs_proc)
@@ -495,42 +507,8 @@ class InspectorPanel(QWidget):
 
     def _populate_device_combo(self, node: NodeModel) -> None:
         self.cmb_device.clear()
-        self.cmb_device.addItem("<Unassigned>", ("", ""))
-        want_capture = node.node_type in (NodeType.MIC_INPUT, NodeType.VIRTUAL_INPUT)
-        is_virtual_node = node.node_type in (
-            NodeType.VIRTUAL_INPUT,
-            NodeType.VIRTUAL_OUTPUT,
-        )
-        is_physical_only = node.node_type in (
-            NodeType.MIC_INPUT,
-            NodeType.SPEAKER_OUTPUT,
-        )
-        candidates = [
-            d
-            for d in self._devices
-            if (d.flow == DataFlow.CAPTURE if want_capture else d.flow == DataFlow.RENDER)
-            and (not is_virtual_node or d.is_virtual)
-            and (not is_physical_only or not d.is_virtual)
-        ]
-        candidates.sort(key=lambda d: d.name.lower())
-
-        seen_ids = {""}
-        dev_by_id = {d.id: d for d in self._devices}
-        for d in candidates:
-            label = f"[Virtual] {d.name}" if d.is_virtual else d.name
-            self.cmb_device.addItem(label, (d.id, d.name))
-            seen_ids.add(d.id)
-
-        if node.device_id and node.device_id not in seen_ids:
-            existing = dev_by_id.get(node.device_id)
-            if existing is not None:
-                lbl = f"[Virtual] {existing.name}" if existing.is_virtual else existing.name
-                self.cmb_device.addItem(lbl, (existing.id, existing.name))
-            else:
-                self.cmb_device.addItem(
-                    f"[OFFLINE] {node.device_name or node.device_id}",
-                    (node.device_id, node.device_name),
-                )
+        for label, data in build_device_combo_entries(node, self._devices):
+            self.cmb_device.addItem(label, data)
 
         idx = 0
         for i in range(self.cmb_device.count()):
@@ -542,17 +520,8 @@ class InspectorPanel(QWidget):
 
     def _populate_process_combo(self, node: NodeModel) -> None:
         self.cmb_process.clear()
-        self.cmb_process.addItem("<Select running process...>", (0, ""))
-        seen_pids = {0}
-        for p in self._processes:
-            tag = "[Audio] " if p.has_audio_session else ""
-            label = f"{tag}{p.exe_name} (PID {p.pid})"
-            if p.window_title:
-                label += f" — {p.window_title[:36]}"
-            self.cmb_process.addItem(label, (p.pid, p.exe_name))
-            seen_pids.add(p.pid)
-        if node.pid and node.pid not in seen_pids:
-            self.cmb_process.addItem(f"[Exited] {node.process_name} (PID {node.pid})", (node.pid, node.process_name))
+        for label, data in build_process_combo_entries(node, self._processes):
+            self.cmb_process.addItem(label, data)
         idx = 0
         for i in range(self.cmb_process.count()):
             data = self.cmb_process.itemData(i)
@@ -633,15 +602,33 @@ class InspectorPanel(QWidget):
 
 
 class BottomTelemetryPanel(QWidget):
-    """Bottom dock: live level meters, engine status, active connections, device status & logs."""
+    """ComfyUI-style bottom terminal dock: Meters, Active Connections, Engine & Devices, Logs."""
+
+    close_requested = Signal()
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
+        self.setObjectName("BottomTerminal")
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(6, 4, 6, 4)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
 
-        self.tabs = QTabWidget()
+        self.tabs = QTabWidget(self)
+        self.tabs.setObjectName("BottomTerminalTabs")
         layout.addWidget(self.tabs)
+
+        corner = QWidget(self)
+        corner_lay = QHBoxLayout(corner)
+        corner_lay.setContentsMargins(0, 2, 4, 2)
+        corner_lay.setSpacing(4)
+        self.btn_close = QToolButton(corner)
+        self.btn_close.setObjectName("TerminalCloseButton")
+        self.btn_close.setText("×")
+        self.btn_close.setToolTip("Close Terminal (Ctrl+`)")
+        self.btn_close.setAccessibleName("Close Terminal")
+        self.btn_close.clicked.connect(self.close_requested.emit)
+        corner_lay.addWidget(self.btn_close)
+        self.tabs.setCornerWidget(corner, Qt.Corner.TopRightCorner)
 
         # Tab 1: Audio Level Meters
         self.meter_table = QTableWidget(0, 4)
@@ -664,7 +651,7 @@ class BottomTelemetryPanel(QWidget):
         self.device_status_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         s_lay.addWidget(self.lbl_engine_summary)
         s_lay.addWidget(self.device_status_table)
-        self.tabs.addTab(status_w, "Engine & Devices")
+        self.tabs.addTab(status_w, "Engine && Devices")
 
         # Tab 4: Logs
         self.log_console = QPlainTextEdit()

@@ -5,11 +5,12 @@ from __future__ import annotations
 import json
 from typing import Dict, Iterable, List, Optional, Tuple
 
-from PySide6.QtCore import QPointF, QRect, QRectF, Qt, QTimer, Signal
+from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QBrush,
     QColor,
     QFont,
+    QKeySequence,
     QPainter,
     QPainterPath,
     QPen,
@@ -17,16 +18,30 @@ from PySide6.QtGui import (
     QUndoStack,
 )
 from PySide6.QtWidgets import (
+    QApplication,
+    QCheckBox,
+    QComboBox,
+    QFileDialog,
+    QFrame,
     QGraphicsItem,
     QGraphicsObject,
     QGraphicsPathItem,
+    QGraphicsProxyWidget,
     QGraphicsRectItem,
     QGraphicsScene,
     QGraphicsView,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
     QMenu,
+    QPushButton,
+    QSlider,
+    QToolButton,
+    QVBoxLayout,
+    QWidget,
 )
 
-from audioflow.engine_bridge import NodeMeter, NodeType
+from audioflow.engine_bridge import DeviceInfo, NodeMeter, NodeType, ProcessInfo
 from audioflow.models.graph_model import (
     ConnectionModel,
     GroupModel,
@@ -38,7 +53,12 @@ from audioflow.ui.theme import (
     CANVAS_BG,
     CANVAS_GRID_MAJOR,
     CANVAS_GRID_MINOR,
+    CATEGORY_BODY_COLORS,
     CATEGORY_COLORS,
+    COMFY_BORDER,
+    COMFY_STROKE,
+    COMFY_TEXT_PRIMARY,
+    COMFY_TEXT_SECONDARY,
     NODE_BG,
     NODE_BORDER,
     NODE_SELECTED_BORDER,
@@ -48,14 +68,37 @@ from audioflow.ui.theme import (
     WIRE_IDLE_COLOR,
     WIRE_SELECTED_COLOR,
 )
+from audioflow.ui.widget_helpers import (
+    EQ_BAND_LABELS,
+    build_device_combo_entries,
+    build_process_combo_entries,
+    node_needs_device_selector,
+    node_supports_mute,
+    node_supports_volume,
+    virtual_driver_missing_text,
+)
 
 
-NODE_WIDTH = 224.0
+NODE_WIDTH = 264.0
 HEADER_HEIGHT = 28.0
-PORT_ROW_HEIGHT = 22.0
-FOOTER_HEIGHT = 26.0
-PORT_RADIUS = 6.5
+PORT_ROW_HEIGHT = 20.0
+FOOTER_HEIGHT = 18.0
+PORT_RADIUS = 6.0
 NODE_DRAG_MIME_TYPE = "application/x-audioflow-node"
+
+
+class _NoWheelComboBox(QComboBox):
+    """Combo box that passes wheel scrolling through to zoom the canvas."""
+
+    def wheelEvent(self, event) -> None:  # noqa: N802
+        event.ignore()
+
+
+class _NoWheelSlider(QSlider):
+    """Horizontal slider that passes wheel scrolling through to zoom the canvas."""
+
+    def wheelEvent(self, event) -> None:  # noqa: N802
+        event.ignore()
 
 
 class PortItem(QGraphicsObject):
@@ -104,7 +147,7 @@ class PortItem(QGraphicsObject):
 
 
 class NodeItem(QGraphicsObject):
-    """Visual card representing one NodeModel on the patchbay canvas."""
+    """ComfyUI-style visual card representing one NodeModel with inline argument widgets."""
 
     def __init__(self, model: NodeModel, canvas: "NodeCanvas") -> None:
         super().__init__()
@@ -115,6 +158,27 @@ class NodeItem(QGraphicsObject):
         self._peak_l = 0.0
         self._peak_r = 0.0
         self._drag_start_pos: Optional[QPointF] = None
+        self._collapsed = False
+        self._updating_widgets = False
+        self._widget_height = 0.0
+
+        # Inline widget handles (populated dynamically based on node type)
+        self._proxy: Optional[QGraphicsProxyWidget] = None
+        self._widget_root: Optional[QWidget] = None
+        self.cmb_device: Optional[QComboBox] = None
+        self.lbl_warn: Optional[QLabel] = None
+        self.cmb_process: Optional[QComboBox] = None
+        self.edit_file: Optional[QLineEdit] = None
+        self.btn_browse: Optional[QPushButton] = None
+        self.slider_vol: Optional[QSlider] = None
+        self.lbl_vol_val: Optional[QLabel] = None
+        self.slider_gain: Optional[QSlider] = None
+        self.lbl_gain_val: Optional[QLabel] = None
+        self.chk_mute: Optional[QCheckBox] = None
+        self.cmb_map_l: Optional[QComboBox] = None
+        self.cmb_map_r: Optional[QComboBox] = None
+        self.eq_sliders: List[QSlider] = []
+        self.lbl_eq_vals: List[QLabel] = []
 
         self.setFlags(
             QGraphicsItem.GraphicsItemFlag.ItemIsMovable
@@ -124,15 +188,23 @@ class NodeItem(QGraphicsObject):
         self.setPos(model.x, model.y)
         self.setZValue(2)
         self._build_ports()
+        self._build_inline_widgets()
+        self.sync_from_model()
 
-    def _compute_height(self) -> float:
+    def _port_area_height(self) -> float:
         spec = self.model.spec()
         rows = max(len(spec.input_ports), len(spec.output_ports), 1)
-        return HEADER_HEIGHT + 12.0 + rows * PORT_ROW_HEIGHT + FOOTER_HEIGHT
+        return 6.0 + rows * PORT_ROW_HEIGHT
+
+    def _compute_height(self) -> float:
+        port_h = self._port_area_height()
+        if self._collapsed or self._widget_height <= 0:
+            return HEADER_HEIGHT + port_h + FOOTER_HEIGHT
+        return HEADER_HEIGHT + port_h + self._widget_height + 6.0 + FOOTER_HEIGHT
 
     def _build_ports(self) -> None:
         spec = self.model.spec()
-        y0 = HEADER_HEIGHT + 16.0
+        y0 = HEADER_HEIGHT + 12.0
         for idx, label in enumerate(spec.input_ports):
             p = PortItem(self, idx, is_output=False, label=label)
             p.setPos(0.0, y0 + idx * PORT_ROW_HEIGHT)
@@ -141,6 +213,344 @@ class NodeItem(QGraphicsObject):
             p = PortItem(self, idx, is_output=True, label=label)
             p.setPos(NODE_WIDTH, y0 + idx * PORT_ROW_HEIGHT)
             self.output_ports.append(p)
+
+    def _build_inline_widgets(self) -> None:
+        root = QWidget()
+        root.setObjectName("NodeInlineWidgetRoot")
+        root.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        lay = QVBoxLayout(root)
+        lay.setContentsMargins(0, 2, 0, 2)
+        lay.setSpacing(4)
+
+        nt = self.model.node_type
+        has_widgets = False
+
+        if node_needs_device_selector(nt):
+            has_widgets = True
+            row = QHBoxLayout()
+            row.setContentsMargins(0, 0, 0, 0)
+            row.setSpacing(6)
+            lbl = QLabel("Device")
+            lbl.setFixedWidth(46)
+            self.cmb_device = _NoWheelComboBox(root)
+            self.cmb_device.currentIndexChanged.connect(self._on_device_changed)
+            row.addWidget(lbl)
+            row.addWidget(self.cmb_device, 1)
+            lay.addLayout(row)
+
+            self.lbl_warn = QLabel(root)
+            self.lbl_warn.setWordWrap(True)
+            self.lbl_warn.setStyleSheet("color: #FCBB00; font-size: 10px;")
+            self.lbl_warn.hide()
+            lay.addWidget(self.lbl_warn)
+
+        if nt == NodeType.APP_CAPTURE:
+            has_widgets = True
+            row = QHBoxLayout()
+            row.setContentsMargins(0, 0, 0, 0)
+            row.setSpacing(6)
+            lbl = QLabel("App")
+            lbl.setFixedWidth(30)
+            self.cmb_process = _NoWheelComboBox(root)
+            self.cmb_process.currentIndexChanged.connect(self._on_process_changed)
+            row.addWidget(lbl)
+            row.addWidget(self.cmb_process, 1)
+            lay.addLayout(row)
+
+        if nt == NodeType.FILE_RECORDING:
+            has_widgets = True
+            row = QHBoxLayout()
+            row.setContentsMargins(0, 0, 0, 0)
+            row.setSpacing(4)
+            self.edit_file = QLineEdit(root)
+            self.edit_file.setPlaceholderText("recording.wav...")
+            self.edit_file.editingFinished.connect(self._on_file_changed)
+            self.btn_browse = QPushButton("Browse", root)
+            self.btn_browse.clicked.connect(self._browse_wav)
+            row.addWidget(self.edit_file, 1)
+            row.addWidget(self.btn_browse)
+            lay.addLayout(row)
+
+        if node_supports_volume(nt):
+            has_widgets = True
+            row = QHBoxLayout()
+            row.setContentsMargins(0, 0, 0, 0)
+            row.setSpacing(6)
+            lbl = QLabel("Volume")
+            lbl.setFixedWidth(44)
+            self.slider_vol = _NoWheelSlider(Qt.Orientation.Horizontal, root)
+            self.slider_vol.setRange(0, 200)
+            self.slider_vol.valueChanged.connect(self._on_volume_slider)
+            self.lbl_vol_val = QLabel("100%", root)
+            self.lbl_vol_val.setFixedWidth(34)
+            self.lbl_vol_val.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            row.addWidget(lbl)
+            row.addWidget(self.slider_vol, 1)
+            row.addWidget(self.lbl_vol_val)
+            lay.addLayout(row)
+
+        if nt == NodeType.GAIN:
+            has_widgets = True
+            row = QHBoxLayout()
+            row.setContentsMargins(0, 0, 0, 0)
+            row.setSpacing(6)
+            lbl = QLabel("Gain")
+            lbl.setFixedWidth(34)
+            self.slider_gain = _NoWheelSlider(Qt.Orientation.Horizontal, root)
+            self.slider_gain.setRange(-300, 300)
+            self.slider_gain.valueChanged.connect(self._on_gain_slider)
+            self.lbl_gain_val = QLabel("+0.0dB", root)
+            self.lbl_gain_val.setFixedWidth(46)
+            self.lbl_gain_val.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            row.addWidget(lbl)
+            row.addWidget(self.slider_gain, 1)
+            row.addWidget(self.lbl_gain_val)
+            lay.addLayout(row)
+
+        if nt == NodeType.CHANNEL_MAP:
+            has_widgets = True
+            for title, attr in (("Left <-", "cmb_map_l"), ("Right <-", "cmb_map_r")):
+                row = QHBoxLayout()
+                row.setContentsMargins(0, 0, 0, 0)
+                row.setSpacing(6)
+                lbl = QLabel(title)
+                lbl.setFixedWidth(48)
+                cmb = _NoWheelComboBox(root)
+                cmb.addItem("0 (Left)", 0)
+                cmb.addItem("1 (Right)", 1)
+                cmb.currentIndexChanged.connect(self._on_channel_map_changed)
+                row.addWidget(lbl)
+                row.addWidget(cmb, 1)
+                lay.addLayout(row)
+                setattr(self, attr, cmb)
+
+        if nt == NodeType.EQUALIZER:
+            has_widgets = True
+            for b, freq in enumerate(EQ_BAND_LABELS):
+                row = QHBoxLayout()
+                row.setContentsMargins(0, 0, 0, 0)
+                row.setSpacing(6)
+                lbl = QLabel(freq, root)
+                lbl.setFixedWidth(36)
+                sl = _NoWheelSlider(Qt.Orientation.Horizontal, root)
+                sl.setRange(-120, 120)
+                sl.valueChanged.connect(lambda val, band=b: self._on_eq_changed(band, val))
+                v_lbl = QLabel("+0.0", root)
+                v_lbl.setFixedWidth(34)
+                v_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                row.addWidget(lbl)
+                row.addWidget(sl, 1)
+                row.addWidget(v_lbl)
+                lay.addLayout(row)
+                self.eq_sliders.append(sl)
+                self.lbl_eq_vals.append(v_lbl)
+
+        if node_supports_mute(nt):
+            has_widgets = True
+            self.chk_mute = QCheckBox("Muted" if nt == NodeType.MUTE else "Mute", root)
+            self.chk_mute.stateChanged.connect(self._on_mute_changed)
+            lay.addWidget(self.chk_mute)
+
+        if not has_widgets:
+            root.deleteLater()
+            self._widget_root = None
+            self._proxy = None
+            self._widget_height = 0.0
+            return
+
+        self._widget_root = root
+        self._proxy = QGraphicsProxyWidget(self)
+        self._proxy.setWidget(root)
+        self._proxy.setZValue(3)
+        self._layout_inline_proxy()
+
+    def _layout_inline_proxy(self) -> None:
+        if self._proxy is None or self._widget_root is None:
+            self._widget_height = 0.0
+            return
+        self._widget_root.setFixedWidth(int(NODE_WIDTH - 16))
+        if self._widget_root.layout() is not None:
+            self._widget_root.layout().activate()
+        self._widget_root.adjustSize()
+        h = float(max(22, self._widget_root.sizeHint().height()))
+        self._widget_height = h
+        widgets_top = HEADER_HEIGHT + self._port_area_height()
+        self._proxy.setPos(8.0, widgets_top)
+        self._proxy.resize(NODE_WIDTH - 16.0, h)
+        self._proxy.setVisible(not self._collapsed)
+
+    def set_collapsed(self, collapsed: bool) -> None:
+        if self._collapsed == collapsed:
+            return
+        self.prepareGeometryChange()
+        self._collapsed = collapsed
+        if self._proxy is not None:
+            self._proxy.setVisible(not collapsed)
+        self.canvas.update_connections_for_node(self.model.id)
+        self.canvas.update_groups_geometry()
+        self.update()
+
+    def refresh_catalog(self, devices: List[DeviceInfo], processes: List[ProcessInfo]) -> None:
+        self._updating_widgets = True
+        try:
+            if self.cmb_device is not None:
+                self.cmb_device.clear()
+                for label, data in build_device_combo_entries(self.model, devices):
+                    self.cmb_device.addItem(label, data)
+                idx = 0
+                for i in range(self.cmb_device.count()):
+                    data = self.cmb_device.itemData(i)
+                    if data and data[0] == self.model.device_id:
+                        idx = i
+                        break
+                self.cmb_device.setCurrentIndex(idx)
+
+                if self.lbl_warn is not None:
+                    if not self.model.device_available and self.model.device_id:
+                        self.lbl_warn.setText(
+                            f"Offline: {self.model.device_name or self.model.device_id}"
+                        )
+                        self.lbl_warn.show()
+                    else:
+                        warn = virtual_driver_missing_text(self.model.node_type, devices)
+                        if warn:
+                            self.lbl_warn.setText("Install VirtualDrivers/Virtual-Audio-Driver")
+                            self.lbl_warn.setToolTip(warn)
+                            self.lbl_warn.show()
+                        else:
+                            self.lbl_warn.hide()
+
+            if self.cmb_process is not None:
+                self.cmb_process.clear()
+                for label, data in build_process_combo_entries(self.model, processes):
+                    self.cmb_process.addItem(label, data)
+                idx = 0
+                for i in range(self.cmb_process.count()):
+                    data = self.cmb_process.itemData(i)
+                    if data and data[0] == self.model.pid:
+                        idx = i
+                        break
+                self.cmb_process.setCurrentIndex(idx)
+        finally:
+            self._updating_widgets = False
+
+        self.prepareGeometryChange()
+        self._layout_inline_proxy()
+        self.canvas.update_connections_for_node(self.model.id)
+        self.canvas.update_groups_geometry()
+        self.update()
+
+    def sync_from_model(self) -> None:
+        self._updating_widgets = True
+        try:
+            if self.edit_file is not None:
+                self.edit_file.setText(self.model.file_path)
+            if self.slider_vol is not None and self.lbl_vol_val is not None:
+                pct = int(round(self.model.volume * 100))
+                self.slider_vol.setValue(pct)
+                self.lbl_vol_val.setText(f"{pct}%")
+            if self.slider_gain is not None and self.lbl_gain_val is not None:
+                self.slider_gain.setValue(int(round(self.model.gain_db * 10)))
+                self.lbl_gain_val.setText(f"{self.model.gain_db:+.1f}dB")
+            if self.chk_mute is not None:
+                self.chk_mute.setChecked(self.model.muted)
+            if self.cmb_map_l is not None:
+                self.cmb_map_l.setCurrentIndex(0 if self.model.channel_map_left == 0 else 1)
+            if self.cmb_map_r is not None:
+                self.cmb_map_r.setCurrentIndex(0 if self.model.channel_map_right == 0 else 1)
+            for idx, sl in enumerate(self.eq_sliders):
+                val_db = self.model.eq_gains_db[idx] if idx < len(self.model.eq_gains_db) else 0.0
+                sl.setValue(int(round(val_db * 10)))
+                self.lbl_eq_vals[idx].setText(f"{val_db:+.1f}")
+        finally:
+            self._updating_widgets = False
+        self.refresh_catalog(self.canvas.devices, self.canvas.processes)
+
+    def _on_device_changed(self) -> None:
+        if self._updating_widgets or self.cmb_device is None:
+            return
+        data = self.cmb_device.currentData()
+        if data:
+            self.model.device_id = data[0]
+            self.model.device_name = data[1]
+            self.model.device_available = True
+            self.canvas.graph_changed.emit()
+            self.update()
+
+    def _on_process_changed(self) -> None:
+        if self._updating_widgets or self.cmb_process is None:
+            return
+        data = self.cmb_process.currentData()
+        if data:
+            self.model.pid = int(data[0])
+            self.model.process_name = str(data[1])
+            self.canvas.graph_changed.emit()
+            self.update()
+
+    def _browse_wav(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(
+            self.canvas,
+            "Select Output WAV Recording Path",
+            self.model.file_path or "audioflow_recording.wav",
+            "WAV Files (*.wav)",
+        )
+        if path and self.edit_file is not None:
+            self.edit_file.setText(path)
+            self._on_file_changed()
+
+    def _on_file_changed(self) -> None:
+        if self._updating_widgets or self.edit_file is None:
+            return
+        new_path = self.edit_file.text().strip()
+        if new_path != self.model.file_path:
+            self.model.file_path = new_path
+            self.canvas.graph_changed.emit()
+            self.update()
+
+    def _on_volume_slider(self, val: int) -> None:
+        if self._updating_widgets:
+            return
+        self.model.volume = val / 100.0
+        if self.lbl_vol_val is not None:
+            self.lbl_vol_val.setText(f"{val}%")
+        self.canvas.float_param_changed.emit(self.model.id, "volume", self.model.volume)
+        self.canvas.workspace_modified.emit()
+
+    def _on_gain_slider(self, val: int) -> None:
+        if self._updating_widgets:
+            return
+        self.model.gain_db = val / 10.0
+        if self.lbl_gain_val is not None:
+            self.lbl_gain_val.setText(f"{self.model.gain_db:+.1f}dB")
+        self.canvas.float_param_changed.emit(self.model.id, "gain_db", self.model.gain_db)
+        self.canvas.workspace_modified.emit()
+
+    def _on_mute_changed(self) -> None:
+        if self._updating_widgets or self.chk_mute is None:
+            return
+        self.model.muted = self.chk_mute.isChecked()
+        self.canvas.int_param_changed.emit(self.model.id, "muted", 1 if self.model.muted else 0)
+        self.canvas.workspace_modified.emit()
+        self.update()
+
+    def _on_channel_map_changed(self) -> None:
+        if self._updating_widgets or self.cmb_map_l is None or self.cmb_map_r is None:
+            return
+        self.model.channel_map_left = int(self.cmb_map_l.currentData() or 0)
+        self.model.channel_map_right = int(self.cmb_map_r.currentData() or 0)
+        self.canvas.graph_changed.emit()
+
+    def _on_eq_changed(self, band: int, tenths_db: int) -> None:
+        if self._updating_widgets:
+            return
+        db = tenths_db / 10.0
+        while len(self.model.eq_gains_db) < 5:
+            self.model.eq_gains_db.append(0.0)
+        self.model.eq_gains_db[band] = db
+        if band < len(self.lbl_eq_vals):
+            self.lbl_eq_vals[band].setText(f"{db:+.1f}")
+        self.canvas.float_param_changed.emit(self.model.id, f"eq_band_{band}", db)
+        self.canvas.workspace_modified.emit()
 
     def set_meter(self, meter: Optional[NodeMeter]) -> None:
         if meter is None:
@@ -154,97 +564,107 @@ class NodeItem(QGraphicsObject):
     def boundingRect(self) -> QRectF:
         return QRectF(-2, -2, NODE_WIDTH + 4, self._compute_height() + 4)
 
-    def _subtitle_text(self) -> str:
-        nt = self.model.node_type
-        if nt == NodeType.APP_CAPTURE:
-            if self.model.process_name:
-                return f"{self.model.process_name} (PID {self.model.pid})"
-            return "Select application..."
-        if nt == NodeType.FILE_RECORDING:
-            return self.model.file_path.rsplit("\\", 1)[-1] if self.model.file_path else "No WAV path"
-        if nt in (NodeType.VOLUME, NodeType.GAIN, NodeType.MUTE):
-            if self.model.muted:
-                return "MUTED"
-            if nt == NodeType.VOLUME:
-                return f"Vol {int(round(self.model.volume * 100))}%"
-            if nt == NodeType.GAIN:
-                return f"Gain {self.model.gain_db:+.1f} dB"
-            return "Active"
-        if self.model.device_name:
-            prefix = "[OFFLINE] " if not self.model.device_available else ""
-            return prefix + self.model.device_name
-        if self.model.device_id:
-            prefix = "[OFFLINE] " if not self.model.device_available else ""
-            return prefix + self.model.device_id[:28]
-        return self.model.spec().category.value.upper()
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            pos = event.pos()
+            if 0.0 <= pos.y() <= HEADER_HEIGHT and 0.0 <= pos.x() <= 26.0:
+                self.set_collapsed(not self._collapsed)
+                event.accept()
+                return
+            if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+                self.setSelected(not self.isSelected())
+                event.accept()
+                return
+        super().mousePressEvent(event)
 
     def paint(self, painter: QPainter, option, widget=None) -> None:
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         h = self._compute_height()
         spec = self.model.spec()
-        accent = QColor(CATEGORY_COLORS[spec.category])
+        header_hex, _ = CATEGORY_COLORS[spec.category]
+        body_hex = CATEGORY_BODY_COLORS[spec.category]
 
-        # Main card body
         card_rect = QRectF(0, 0, NODE_WIDTH, h)
-        border_color = QColor(NODE_SELECTED_BORDER if self.isSelected() else NODE_BORDER)
-        if not self.model.device_available:
-            border_color = QColor("#EF4444")
+        selected = self.isSelected()
+        border_color = QColor(NODE_SELECTED_BORDER if selected else NODE_BORDER)
+        if not self.model.device_available and not selected:
+            border_color = QColor("#E04E48")
 
-        painter.setPen(QPen(border_color, 2.0 if self.isSelected() else 1.3))
-        painter.setBrush(QBrush(QColor(NODE_BG)))
+        painter.setPen(QPen(border_color, 2.2 if selected else 1.1))
+        painter.setBrush(QBrush(QColor(body_hex)))
         painter.drawRoundedRect(card_rect, 8, 8)
 
-        # Header band
+        # ComfyUI Header band
         header_path = QPainterPath()
         header_path.addRoundedRect(QRectF(0, 0, NODE_WIDTH, HEADER_HEIGHT), 8, 8)
         painter.save()
         painter.setClipRect(QRectF(0, 0, NODE_WIDTH, HEADER_HEIGHT))
-        painter.fillPath(header_path, accent.darker(135))
+        painter.fillPath(header_path, QColor(header_hex))
         painter.restore()
 
-        painter.setPen(QColor("#F8FAFC"))
-        title_font = QFont("Segoe UI", 9, QFont.Weight.Bold)
-        painter.setFont(title_font)
+        painter.setPen(QPen(QColor("#242426"), 1.0))
+        painter.drawLine(QPointF(1, HEADER_HEIGHT), QPointF(NODE_WIDTH - 1, HEADER_HEIGHT))
+
+        # Collapse chevron + Title
+        painter.setPen(QColor(COMFY_TEXT_SECONDARY))
+        painter.setFont(QFont("Segoe UI", 9))
+        painter.drawText(
+            QRectF(6, 2, 16, HEADER_HEIGHT - 4),
+            Qt.AlignmentFlag.AlignCenter,
+            "▸" if self._collapsed else "▾",
+        )
+
+        painter.setPen(QColor(COMFY_TEXT_PRIMARY if selected else "#E2E4E9"))
+        painter.setFont(QFont("Segoe UI", 9, QFont.Weight.DemiBold))
         title = painter.fontMetrics().elidedText(
             f"#{self.model.id} {self.model.display_title()}",
             Qt.TextElideMode.ElideRight,
-            int(NODE_WIDTH - 16),
+            int(NODE_WIDTH - 44),
         )
-        painter.drawText(QRectF(10, 4, NODE_WIDTH - 20, HEADER_HEIGHT - 6), Qt.AlignmentFlag.AlignVCenter, title)
+        painter.drawText(
+            QRectF(24, 3, NODE_WIDTH - 44, HEADER_HEIGHT - 6),
+            Qt.AlignmentFlag.AlignVCenter,
+            title,
+        )
+
+        # Small active/muted status indicator pill on far right of header
+        painter.setPen(Qt.PenStyle.NoPen)
+        status_col = "#E04E48" if (self.model.muted or not self.model.device_available) else "#00CD72"
+        painter.setBrush(QColor(status_col))
+        painter.drawEllipse(QPointF(NODE_WIDTH - 13.0, HEADER_HEIGHT / 2.0), 3.5, 3.5)
 
         # Port labels
         label_font = QFont("Segoe UI", 8)
         painter.setFont(label_font)
-        painter.setPen(QColor("#CBD5E1"))
+        painter.setPen(QColor(COMFY_TEXT_SECONDARY))
         for p in self.input_ports:
-            painter.drawText(QRectF(12, p.y() - 9, 85, 18), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, p.label)
+            painter.drawText(
+                QRectF(12, p.y() - 9, 95, 18),
+                Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
+                p.label,
+            )
         for p in self.output_ports:
-            painter.drawText(QRectF(NODE_WIDTH - 97, p.y() - 9, 85, 18), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight, p.label)
+            painter.drawText(
+                QRectF(NODE_WIDTH - 107, p.y() - 9, 95, 18),
+                Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight,
+                p.label,
+            )
 
-        # Footer: subtitle + stereo mini meter
-        footer_y = h - FOOTER_HEIGHT
-        painter.setPen(QColor("#EF4444" if not self.model.device_available else "#94A3B8"))
-        sub_font = QFont("Segoe UI")
-        sub_font.setPointSizeF(7.5)
-        painter.setFont(sub_font)
-        sub = painter.fontMetrics().elidedText(
-            self._subtitle_text(), Qt.TextElideMode.ElideRight, int(NODE_WIDTH - 20)
-        )
-        painter.drawText(QRectF(10, footer_y - 2, NODE_WIDTH - 20, 14), Qt.AlignmentFlag.AlignVCenter, sub)
-
-        # Mini L/R level bars
+        # Mini stereo L/R signal meter at bottom
         bar_w = NODE_WIDTH - 20
-        bar_y = h - 10.0
+        bar_y = h - 11.0
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor("#0B0E14"))
+        painter.setBrush(QColor("#1A1A1C"))
         painter.drawRoundedRect(QRectF(10, bar_y, bar_w, 3), 1.5, 1.5)
         painter.drawRoundedRect(QRectF(10, bar_y + 4, bar_w, 3), 1.5, 1.5)
 
         if self._peak_l > 0.002:
-            painter.setBrush(QColor("#EF4444" if self._peak_l > 0.92 else "#22C55E"))
+            col = "#F75951" if self._peak_l > 0.92 else ("#FCBB00" if self._peak_l > 0.72 else "#00CD72")
+            painter.setBrush(QColor(col))
             painter.drawRoundedRect(QRectF(10, bar_y, bar_w * self._peak_l, 3), 1.5, 1.5)
         if self._peak_r > 0.002:
-            painter.setBrush(QColor("#EF4444" if self._peak_r > 0.92 else "#22C55E"))
+            col = "#F75951" if self._peak_r > 0.92 else ("#FCBB00" if self._peak_r > 0.72 else "#00CD72")
+            painter.setBrush(QColor(col))
             painter.drawRoundedRect(QRectF(10, bar_y + 4, bar_w * self._peak_r, 3), 1.5, 1.5)
 
     def itemChange(self, change, value):
@@ -293,7 +713,7 @@ class ConnectionItem(QGraphicsPathItem):
             return
 
         if self._active_level > 0.003:
-            base_pen = QPen(QColor("#155E75"), 3.0)
+            base_pen = QPen(QColor("#2A4A3A"), 3.0)
             painter.setPen(base_pen)
             painter.drawPath(self.path())
 
@@ -474,10 +894,14 @@ class NodeCanvas(QGraphicsView):
     workspace_modified = Signal()
     selection_changed = Signal(object)  # Optional[NodeModel]
     validation_error = Signal(str)
+    float_param_changed = Signal(int, str, float)
+    int_param_changed = Signal(int, str, int)
 
     def __init__(self, project: ProjectModel, parent=None) -> None:
         super().__init__(parent)
         self.project = project
+        self.devices: List[DeviceInfo] = []
+        self.processes: List[ProcessInfo] = []
         self.undo_stack = QUndoStack(self)
         self.scene_obj = QGraphicsScene(self)
         self.scene_obj.setSceneRect(-10000, -10000, 20000, 20000)
@@ -490,6 +914,7 @@ class NodeCanvas(QGraphicsView):
         self.setDragMode(QGraphicsView.DragMode.NoDrag)
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setAcceptDrops(True)
+        self.centerOn(260, 180)
 
         self.node_items: Dict[int, NodeItem] = {}
         self.conn_items: Dict[ConnectionModel, ConnectionItem] = {}
@@ -511,6 +936,85 @@ class NodeCanvas(QGraphicsView):
         self._anim_timer.setInterval(66)
         self._anim_timer.timeout.connect(self._tick_animation)
         self._anim_timer.start()
+
+        self._build_floating_canvas_menu()
+
+    def _build_floating_canvas_menu(self) -> None:
+        """ComfyUI GraphCanvasMenu-style bottom-right floating toolbar."""
+        self.floating_bar = QFrame(self)
+        self.floating_bar.setObjectName("CanvasFloatingBar")
+        lay = QHBoxLayout(self.floating_bar)
+        lay.setContentsMargins(6, 4, 6, 4)
+        lay.setSpacing(2)
+
+        def _btn(text: str, tip: str, slot) -> QToolButton:
+            b = QToolButton(self.floating_bar)
+            b.setObjectName("CanvasMenuBtn")
+            b.setText(text)
+            b.setToolTip(tip)
+            b.clicked.connect(slot)
+            return b
+
+        self.btn_float_group = _btn("Group", "Group Selected Nodes (Ctrl+G)", lambda: self.group_selected_action())
+        self.btn_float_del = _btn("Delete", "Delete Selected (Del)", self.delete_selected_action)
+        sep = QFrame(self.floating_bar)
+        sep.setFrameShape(QFrame.Shape.VLine)
+        sep.setFixedWidth(1)
+        sep.setStyleSheet(f"background-color: {COMFY_STROKE};")
+        self.btn_float_fit = _btn("Fit", "Fit / Reset View", self.fit_view)
+        self.btn_float_zout = _btn("−", "Zoom Out", self.zoom_out)
+        self.btn_float_zoom = _btn("100%", "Reset Zoom (100%)", self.reset_zoom)
+        self.btn_float_zin = _btn("+", "Zoom In", self.zoom_in)
+
+        for w in (
+            self.btn_float_group,
+            self.btn_float_del,
+            sep,
+            self.btn_float_fit,
+            self.btn_float_zout,
+            self.btn_float_zoom,
+            self.btn_float_zin,
+        ):
+            lay.addWidget(w)
+
+        self.floating_bar.adjustSize()
+        self._reposition_floating_bar()
+
+    def _reposition_floating_bar(self) -> None:
+        if not hasattr(self, "floating_bar"):
+            return
+        self.floating_bar.adjustSize()
+        bw = self.floating_bar.width()
+        bh = self.floating_bar.height()
+        self.floating_bar.move(max(8, self.width() - bw - 14), max(8, self.height() - bh - 14))
+        self.floating_bar.raise_()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._reposition_floating_bar()
+
+    def _update_zoom_label(self) -> None:
+        if hasattr(self, "btn_float_zoom"):
+            pct = int(round(self.transform().m11() * 100.0))
+            self.btn_float_zoom.setText(f"{pct}%")
+            self._reposition_floating_bar()
+
+    def update_catalog(self, devices: List[DeviceInfo], processes: List[ProcessInfo]) -> None:
+        self.devices = list(devices)
+        self.processes = list(processes)
+        for item in self.node_items.values():
+            item.refresh_catalog(self.devices, self.processes)
+
+    def select_all_nodes(self) -> None:
+        for item in self.node_items.values():
+            item.setSelected(True)
+
+    def fit_view(self) -> None:
+        self.reset_zoom()
+        if self.node_items:
+            bounds = self.scene_obj.itemsBoundingRect()
+            if not bounds.isNull():
+                self.centerOn(bounds.center())
 
     # ----- Background Grid -----
 
@@ -758,16 +1262,20 @@ class NodeCanvas(QGraphicsView):
 
     def zoom_in(self) -> None:
         self.scale(1.15, 1.15)
+        self._update_zoom_label()
 
     def zoom_out(self) -> None:
         self.scale(1.0 / 1.15, 1.0 / 1.15)
+        self._update_zoom_label()
 
     def reset_zoom(self) -> None:
         self.resetTransform()
+        self._update_zoom_label()
 
     def wheelEvent(self, event) -> None:
         factor = 1.15 if event.angleDelta().y() > 0 else 1.0 / 1.15
         self.scale(factor, factor)
+        self._update_zoom_label()
 
     def _find_port_at(self, view_pos) -> Optional[PortItem]:
         search_rect = QRect(view_pos.x() - 10, view_pos.y() - 10, 20, 20)
@@ -780,8 +1288,11 @@ class NodeCanvas(QGraphicsView):
 
     def _find_node_at(self, view_pos) -> Optional[NodeItem]:
         for item in self.items(view_pos):
-            if isinstance(item, NodeItem):
-                return item
+            cur = item
+            while cur is not None:
+                if isinstance(cur, NodeItem):
+                    return cur
+                cur = cur.parentItem()
         return None
 
     def _find_connection_at_input(self, node_id: int, port_index: int) -> Optional[ConnectionModel]:
@@ -885,6 +1396,12 @@ class NodeCanvas(QGraphicsView):
                     self._panning = True
                     self._pan_start = pos
                     self.setCursor(Qt.CursorShape.ClosedHandCursor)
+                    event.accept()
+                    return
+            elif event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+                node_hit = self._find_node_at(pos)
+                if node_hit is not None:
+                    node_hit.setSelected(not node_hit.isSelected())
                     event.accept()
                     return
 
@@ -995,10 +1512,22 @@ class NodeCanvas(QGraphicsView):
                 self.undo_stack.push(MoveNodesCommand(self, moves))
 
     def keyPressEvent(self, event) -> None:
-        if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
-            self.delete_selected_action()
-            event.accept()
-            return
+        fw = QApplication.focusWidget()
+        in_text_edit = isinstance(self.scene_obj.focusItem(), QGraphicsProxyWidget) and isinstance(
+            fw, QLineEdit
+        )
+        if not in_text_edit:
+            if event.matches(QKeySequence.StandardKey.SelectAll) or (
+                event.key() == Qt.Key.Key_A
+                and bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier)
+            ):
+                self.select_all_nodes()
+                event.accept()
+                return
+            if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
+                self.delete_selected_action()
+                event.accept()
+                return
         super().keyPressEvent(event)
 
     def contextMenuEvent(self, event) -> None:

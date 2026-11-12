@@ -230,11 +230,13 @@ def test_pyqt_main_window_canvas_undo_grouping_and_persistence(qapp, tmp_path: P
         assert n_eq.id in win.project.nodes
         assert len(win.project.connections) == 2
 
-        # Inspector selection + Save & Reload preserving offline device
-        canvas.scene_obj.clearSelection()
-        canvas.node_items[n_sys.id].setSelected(True)
-        qapp.processEvents()
-        assert win.right_panel.stack.currentIndex() == 1
+        # ComfyUI inline widgets live directly inside canvas nodes (no right sidebar dock)
+        assert not hasattr(win, "right_panel")
+        eq_item = canvas.node_items[n_eq.id]
+        assert len(eq_item.eq_sliders) == 5
+        rec_item = canvas.node_items[n_rec.id]
+        assert rec_item.edit_file is not None
+        assert rec_item.chk_mute is not None
 
         # Inject a nonexistent device ID and save/load through MainWindow
         n_sys.device_id = "{0.0.0.00000000}.{offline-test-guid}"
@@ -538,6 +540,97 @@ def test_comfyui_left_drag_pan_and_hidden_scrollbars(qapp, tmp_path: Path):
         assert node.y == pytest.approx(100.0)
     finally:
         win.close()
+
+
+def test_comfyui_inline_node_widgets_selection_tabs_and_terminal(qapp, tmp_path: Path):
+    win = AudioFlowMainWindow(
+        auto_start=False,
+        cache_path=tmp_path / "comfyui_cache.json",
+        restore_cache=False,
+    )
+    win.show()
+    qapp.processEvents()
+    try:
+        canvas = win.canvas
+        n_vol = canvas.add_node_action(NodeType.VOLUME, scene_pos=QPointF(80, 100))
+        n_eq = canvas.add_node_action(NodeType.EQUALIZER, scene_pos=QPointF(380, 100))
+        n_vin = canvas.add_node_action(NodeType.VIRTUAL_INPUT, scene_pos=QPointF(80, 320))
+
+        # 1. Inline widgets directly on canvas node cards sync to model
+        vol_item = canvas.node_items[n_vol.id]
+        assert vol_item.slider_vol is not None
+        assert vol_item.chk_mute is not None
+        vol_item.slider_vol.setValue(145)
+        vol_item.chk_mute.setChecked(True)
+        assert n_vol.volume == pytest.approx(1.45)
+        assert n_vol.muted is True
+
+        # Device combo inline filtering matches Physical vs Virtual rules
+        hw_mic = DeviceInfo("hw-mic", "Realtek Mic", DataFlow.CAPTURE, DeviceRoleHint.MICROPHONE, 1, 48000, 2, True, False)
+        vad_mic = DeviceInfo("vad-mic", "Virtual Mic", DataFlow.CAPTURE, DeviceRoleHint.VIRTUAL, 1, 48000, 2, False, True)
+        canvas.update_catalog([hw_mic, vad_mic], [])
+        vin_item = canvas.node_items[n_vin.id]
+        assert vin_item.cmb_device is not None
+        assert [vin_item.cmb_device.itemData(i)[0] for i in range(vin_item.cmb_device.count())] == ["", "vad-mic"]
+
+        # 2. Dirty '*' indicator appears on active workflow tab when edited, cleared by Ctrl+S
+        assert win.workflow_tabs.tabText(0).endswith("*")
+        save_path = tmp_path / "studio_mix.aflow"
+        win.project_path = save_path
+        win._tabs[0].file_path = save_path
+        QTest.keyClick(canvas, Qt.Key.Key_S, Qt.KeyboardModifier.ControlModifier)
+        qapp.processEvents()
+        assert save_path.is_file()
+        assert win.workflow_tabs.tabText(0) == "studio_mix"
+
+        # 3. Ctrl+A selects all nodes cleanly
+        canvas.scene_obj.clearSelection()
+        assert len(canvas.scene_obj.selectedItems()) == 0
+        QTest.keyClick(canvas, Qt.Key.Key_A, Qt.KeyboardModifier.ControlModifier)
+        qapp.processEvents()
+        assert all(canvas.node_items[nid].isSelected() for nid in (n_vol.id, n_eq.id, n_vin.id))
+
+        # 4. Ctrl+Click selects/toggles nodes individually one by one
+        canvas.scene_obj.clearSelection()
+        canvas.centerOn(230, 200)
+        qapp.processEvents()
+        vp = canvas.viewport()
+        pt_vol = canvas.mapFromScene(QPointF(n_vol.x + 120, n_vol.y + 12))
+        pt_eq = canvas.mapFromScene(QPointF(n_eq.x + 120, n_eq.y + 12))
+        QTest.mouseClick(vp, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.ControlModifier, pt_vol)
+        QTest.mouseClick(vp, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.ControlModifier, pt_eq)
+        assert canvas.node_items[n_vol.id].isSelected()
+        assert canvas.node_items[n_eq.id].isSelected()
+        assert not canvas.node_items[n_vin.id].isSelected()
+        # Ctrl+Click again toggles off without clearing other node
+        QTest.mouseClick(vp, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.ControlModifier, pt_vol)
+        assert not canvas.node_items[n_vol.id].isSelected()
+        assert canvas.node_items[n_eq.id].isSelected()
+
+        # 5. '+' new workflow tab creates fresh clean canvas and keeps previous tab intact
+        assert win.workflow_tabs.count() == 1
+        win.btn_new_tab.click()
+        qapp.processEvents()
+        assert win.workflow_tabs.count() == 2
+        assert win.workflow_tabs.currentIndex() == 1
+        assert len(win.project.nodes) == 0
+        win.workflow_tabs.setCurrentIndex(0)
+        qapp.processEvents()
+        assert len(win.project.nodes) == 3
+
+        # 6. Bottom Terminal ('Meters, Status & Logs') closes with '×' and reopens cleanly
+        assert win.bottom_dock.isVisible()
+        win.bottom_panel.btn_close.click()
+        qapp.processEvents()
+        assert not win.bottom_dock.isVisible()
+        assert not win.btn_status_terminal.isChecked()
+        win.btn_status_terminal.click()
+        qapp.processEvents()
+        assert win.bottom_dock.isVisible()
+        assert win.btn_status_terminal.isChecked()
+    finally:
+        win.close()
+
 
 
 
