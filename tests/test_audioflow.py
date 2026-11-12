@@ -20,6 +20,12 @@ from audioflow.models.graph_model import NODE_SPECS, NodeModel, ProjectModel
 from audioflow.ui.canvas import HEADER_HEIGHT, NODE_DRAG_MIME_TYPE, NODE_WIDTH
 from audioflow.ui.main_window import AudioFlowMainWindow
 from audioflow.ui.panels import DraggablePaletteList, InspectorPanel
+from audioflow.ui.widget_helpers import (
+    build_process_combo_entries,
+    matching_process_combo_index,
+    resolve_project_process_bindings,
+    select_best_process_for_name,
+)
 
 
 @pytest.fixture(scope="session")
@@ -1430,6 +1436,188 @@ def test_workflow_tab_drag_swap_moves_icon_and_buttons_atomically(qapp, tmp_path
         qapp.processEvents()
         assert tb.count() == 1
         assert tb.tabText(0) == "Untitled Workflow"
+    finally:
+        win.close()
+
+
+def _proc(
+    pid: int,
+    parent_pid: int,
+    exe_name: str,
+    window_title: str = "",
+    has_audio_session: bool = False,
+    session_peak: float = 0.0,
+) -> ProcessInfo:
+    return ProcessInfo(
+        pid=pid,
+        parent_pid=parent_pid,
+        exe_name=exe_name,
+        exe_path=f"C:/Apps/{exe_name}",
+        window_title=window_title,
+        has_audio_session=has_audio_session,
+        session_peak=session_peak,
+    )
+
+
+def test_app_capture_root_process_selection_and_waiting_combo(qapp):
+    """Multi-process apps prefer the process-tree root and preserve Waiting label when stopped."""
+    from PySide6.QtWidgets import QComboBox
+
+    processes = [
+        _proc(pid=2200, parent_pid=1100, exe_name="chrome.exe", has_audio_session=True, session_peak=0.8),
+        _proc(pid=1100, parent_pid=400, exe_name="chrome.exe", window_title="YouTube - Chrome"),
+        _proc(pid=3300, parent_pid=1100, exe_name="chrome.exe"),
+        _proc(pid=4400, parent_pid=400, exe_name="Spotify.exe", has_audio_session=True),
+    ]
+    best = select_best_process_for_name("CHROME.EXE", processes)
+    assert best is not None
+    assert best.pid == 1100
+
+    project = ProjectModel()
+    node = project.add_node(NodeType.APP_CAPTURE, pid=99999, process_name="chrome.exe")
+
+    changes = resolve_project_process_bindings(project, processes)
+    assert len(changes) == 1
+    assert changes[0] == (node, 99999, 1100)
+    assert node.pid == 1100
+    assert node.process_name == "chrome.exe"
+
+    # When Chrome exits, PID clears to 0 while process_name stays preserved for auto-reconnect
+    changes = resolve_project_process_bindings(project, [processes[3]])
+    assert len(changes) == 1
+    assert changes[0] == (node, 1100, 0)
+    assert node.pid == 0
+    assert node.process_name == "chrome.exe"
+
+    combo = QComboBox()
+    for label, data in build_process_combo_entries(node, [processes[3]]):
+        combo.addItem(label, data)
+    idx = matching_process_combo_index(combo, node)
+    assert idx > 0
+    assert combo.itemText(idx) == "[Waiting] chrome.exe"
+
+
+def test_app_capture_auto_reconnect_on_load_poll_and_running_engine(qapp, tmp_path: Path):
+    """Saved APP_CAPTURE workflows and running tabs auto-relatch onto restarted app PIDs cleanly."""
+    from audioflow.engine_bridge import EngineStats
+
+    live_procs = [
+        _proc(pid=5001, parent_pid=100, exe_name="chrome.exe", window_title="Chrome", has_audio_session=True),
+    ]
+
+    class DynamicProcEngine:
+        def __init__(self) -> None:
+            self.running = False
+            self.applied_graphs = []
+
+        @property
+        def is_running(self) -> bool:
+            return self.running
+
+        def start(self) -> bool:
+            self.running = True
+            return True
+
+        def stop(self) -> None:
+            self.running = False
+
+        def close(self) -> None:
+            self.running = False
+
+        def enumerate_devices(self):
+            return []
+
+        def enumerate_processes(self):
+            return list(live_procs)
+
+        def device_change_seq(self) -> int:
+            return 1
+
+        def apply_graph(self, payload: dict):
+            self.applied_graphs.append(payload)
+            return True, ""
+
+        def set_float_param(self, node_id: int, param: str, val: float) -> bool:
+            return True
+
+        def set_int_param(self, node_id: int, param: str, val: int) -> bool:
+            return True
+
+        def get_node_meters(self):
+            return {}
+
+        def get_engine_stats(self):
+            return EngineStats(
+                running=self.running,
+                sample_rate=48000,
+                block_frames=256,
+                active_nodes=len(self.applied_graphs[-1]["nodes"]) if self.applied_graphs else 0,
+                active_connections=0,
+                virtual_endpoints=0,
+                total_xruns=0,
+                cpu_load_percent=0.0,
+                processed_blocks=1 if self.running else 0,
+                device_change_seq=1,
+            )
+
+        def poll_logs(self):
+            return []
+
+    # 1. Saved .json with stale old PID (1234) automatically binds to live Chrome root PID (5001) on open
+    saved_proj = ProjectModel()
+    saved_node = saved_proj.add_node(NodeType.APP_CAPTURE, pid=1234, process_name="chrome.exe")
+    workflow_json = tmp_path / "chrome_capture.json"
+    workflow_json.write_text(json.dumps(saved_proj.to_project_dict()), encoding="utf-8")
+
+    win = AudioFlowMainWindow(
+        auto_start=False,
+        cache_path=tmp_path / "app_capture_cache.json",
+        restore_cache=False,
+        engine_factory=DynamicProcEngine,
+    )
+    try:
+        win.show()
+        win.load_project_path(workflow_json)
+        qapp.processEvents()
+
+        loaded_node = win.project.nodes[saved_node.id]
+        assert loaded_node.pid == 5001
+        assert loaded_node.process_name == "chrome.exe"
+        assert not win._active_tab().dirty
+
+        node_item = win.canvas.node_items[saved_node.id]
+        assert "PID 5001" in node_item.cmb_process.currentText()
+
+        # Start engine -> running graph gets PID 5001
+        win.start_engine()
+        qapp.processEvents()
+        eng = win._active_tab().engine
+        assert eng.applied_graphs[-1]["nodes"][0]["pid"] == 5001
+
+        # 2. Chrome closes -> poll clears PID to 0 ([Waiting] chrome.exe), keeps process_name and clean dirty flag
+        live_procs.clear()
+        win._last_proc_poll_ts = 0.0
+        win._poll_engine_telemetry()
+        qapp.processEvents()
+        assert loaded_node.pid == 0
+        assert loaded_node.process_name == "chrome.exe"
+        assert node_item.cmb_process.currentText() == "[Waiting] chrome.exe"
+        assert not win._active_tab().dirty
+        assert eng.applied_graphs[-1]["nodes"][0]["pid"] == 0
+
+        # 3. Chrome relaunches under new PID tree (root 8800, audio child 8805) -> telemetry poll rebinds and pushes PID 8800 to C++ graph
+        live_procs.extend([
+            _proc(pid=8805, parent_pid=8800, exe_name="chrome.exe", has_audio_session=True, session_peak=0.9),
+            _proc(pid=8800, parent_pid=100, exe_name="chrome.exe", window_title="Chrome"),
+        ])
+        win._last_proc_poll_ts = 0.0
+        win._poll_engine_telemetry()
+        qapp.processEvents()
+        assert loaded_node.pid == 8800
+        assert loaded_node.process_name == "chrome.exe"
+        assert "PID 8800" in node_item.cmb_process.currentText()
+        assert not win._active_tab().dirty
+        assert eng.applied_graphs[-1]["nodes"][0]["pid"] == 8800
     finally:
         win.close()
 

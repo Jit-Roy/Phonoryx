@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import List, Optional, Tuple
 
 from audioflow.engine_bridge import DataFlow, DeviceInfo, NodeType, ProcessInfo
-from audioflow.models.graph_model import NodeModel
+from audioflow.models.graph_model import NodeModel, ProjectModel
 
 VIRTUAL_DRIVER_MISSING_TEXT = (
     "No Windows virtual audio driver detected. Install the open-source MIT "
@@ -119,4 +119,89 @@ def build_process_combo_entries(
         seen_pids.add(p.pid)
     if node.pid and node.pid not in seen_pids:
         entries.append((f"[Not Running] {node.process_name} (PID {node.pid})", (node.pid, node.process_name)))
+    elif not node.pid and node.process_name.strip():
+        entries.append((f"[Waiting] {node.process_name}", (0, node.process_name)))
     return entries
+
+
+def select_best_process_for_name(
+    process_name: str, processes: List[ProcessInfo]
+) -> Optional[ProcessInfo]:
+    """Pick the best live process matching ``process_name`` (preferring tree roots)."""
+    target = process_name.strip().lower()
+    if not target:
+        return None
+    matches = [p for p in processes if p.exe_name.strip().lower() == target]
+    if not matches:
+        return None
+
+    match_pids = {p.pid for p in matches}
+    child_counts = {p.pid: 0 for p in matches}
+    for proc in matches:
+        if proc.parent_pid in child_counts:
+            child_counts[proc.parent_pid] += 1
+
+    def _score(proc: ProcessInfo) -> Tuple[bool, bool, bool, bool, float, int]:
+        return (
+            proc.parent_pid not in match_pids,
+            child_counts.get(proc.pid, 0) > 0,
+            bool(proc.window_title.strip()),
+            proc.has_audio_session,
+            proc.session_peak,
+            -proc.pid,
+        )
+
+    return max(matches, key=_score)
+
+
+def resolve_project_process_bindings(
+    project: ProjectModel, processes: List[ProcessInfo]
+) -> List[Tuple[NodeModel, int, int]]:
+    """Resolve APP_CAPTURE nodes by ``process_name`` against live ``processes``.
+
+    Returns ``(node, old_pid, new_pid)`` tuples for nodes whose PID changed.
+    Preserves ``node.process_name`` when the target application is not running so
+    it can reconnect automatically once launched.
+    """
+    by_pid = {p.pid: p for p in processes}
+    changes: List[Tuple[NodeModel, int, int]] = []
+    for node in project.nodes.values():
+        if node.node_type != NodeType.APP_CAPTURE:
+            continue
+        old_pid = node.pid
+        target_name = node.process_name.strip()
+
+        if old_pid > 0 and old_pid in by_pid:
+            live = by_pid[old_pid]
+            if not target_name:
+                node.process_name = live.exe_name
+                continue
+            if live.exe_name.strip().lower() == target_name.lower():
+                continue
+
+        if not target_name:
+            continue
+
+        best = select_best_process_for_name(target_name, processes)
+        new_pid = best.pid if best is not None else 0
+        if best is not None:
+            node.process_name = best.exe_name
+        if new_pid != old_pid:
+            node.pid = new_pid
+            changes.append((node, old_pid, new_pid))
+    return changes
+
+
+def matching_process_combo_index(combo, node: NodeModel) -> int:
+    """Return the combo index matching ``node.pid`` or its waiting ``process_name``."""
+    target_name = node.process_name.strip().lower()
+    for i in range(combo.count()):
+        data = combo.itemData(i)
+        if not data:
+            continue
+        pid_val, exe_val = data[0], str(data[1]).strip().lower()
+        if node.pid and pid_val == node.pid:
+            return i
+        if not node.pid and target_name and pid_val == 0 and exe_val == target_name:
+            return i
+    return 0

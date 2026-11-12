@@ -76,6 +76,7 @@ from audioflow.ui.widget_helpers import (
     EQ_BAND_LABELS,
     build_device_combo_entries,
     build_process_combo_entries,
+    matching_process_combo_index,
     node_needs_device_selector,
     node_supports_mute,
     node_supports_volume,
@@ -531,13 +532,9 @@ class NodeItem(QGraphicsObject):
                 self.cmb_process.clear()
                 for label, data in build_process_combo_entries(self.model, processes):
                     self.cmb_process.addItem(label, data)
-                idx = 0
-                for i in range(self.cmb_process.count()):
-                    data = self.cmb_process.itemData(i)
-                    if data and data[0] == self.model.pid:
-                        idx = i
-                        break
-                self.cmb_process.setCurrentIndex(idx)
+                self.cmb_process.setCurrentIndex(
+                    matching_process_combo_index(self.cmb_process, self.model)
+                )
         finally:
             self._updating_widgets = False
 
@@ -851,9 +848,18 @@ class NodeItem(QGraphicsObject):
             title,
         )
 
-        # Small active/muted status indicator pill on far right of header
+        # Small active/muted/waiting status indicator pill on far right of header
         painter.setPen(Qt.PenStyle.NoPen)
-        status_col = "#EC5158" if (self.model.muted or not self.model.device_available) else "#00C753"
+        if self.model.muted or not self.model.device_available:
+            status_col = "#EC5158"
+        elif (
+            self.model.node_type == NodeType.APP_CAPTURE
+            and self.model.process_name.strip()
+            and not self.model.pid
+        ):
+            status_col = "#FFC114"
+        else:
+            status_col = "#00C753"
         painter.setBrush(QColor(status_col))
         painter.drawEllipse(QPointF(w - 13.0, HEADER_HEIGHT / 2.0), 3.5, 3.5)
 

@@ -54,6 +54,7 @@ from audioflow.ui.icons import app_session_icon, device_icon, node_type_icon, ui
 from audioflow.ui.widget_helpers import (
     build_device_combo_entries,
     build_process_combo_entries,
+    matching_process_combo_index,
     virtual_driver_missing_text,
 )
 
@@ -525,13 +526,7 @@ class InspectorPanel(QWidget):
         self.cmb_process.clear()
         for label, data in build_process_combo_entries(node, self._processes):
             self.cmb_process.addItem(label, data)
-        idx = 0
-        for i in range(self.cmb_process.count()):
-            data = self.cmb_process.itemData(i)
-            if data and data[0] == node.pid:
-                idx = i
-                break
-        self.cmb_process.setCurrentIndex(idx)
+        self.cmb_process.setCurrentIndex(matching_process_combo_index(self.cmb_process, node))
 
     def _on_device_changed(self) -> None:
         if self._loading or not self._node:

@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from PySide6.QtCore import QEvent, QSize, Qt, QTimer
 from PySide6.QtGui import QAction, QKeySequence
@@ -32,6 +33,7 @@ from audioflow.models.graph_model import NodeType, ProjectModel
 from audioflow.ui.canvas import NodeCanvas
 from audioflow.ui.icons import ui_icon, workflow_tab_icon
 from audioflow.ui.panels import BottomTelemetryPanel, LeftPalettePanel
+from audioflow.ui.widget_helpers import resolve_project_process_bindings
 from audioflow.ui.workflow_tabs import WorkflowTabBar
 from audioflow.ui.theme import (
     COMFY_STROKE,
@@ -154,6 +156,7 @@ class AudioFlowMainWindow(QMainWindow):
         self._devices: List[DeviceInfo] = []
         self._processes: List[ProcessInfo] = []
         self._last_device_seq = -1
+        self._last_proc_poll_ts = 0.0
 
         self._cache_timer = QTimer(self)
         self._cache_timer.setSingleShot(True)
@@ -941,13 +944,68 @@ class AudioFlowMainWindow(QMainWindow):
 
     # ----- Engine / Catalog -----
 
+    def _has_named_app_capture(self) -> bool:
+        return any(
+            node.node_type == NodeType.APP_CAPTURE and bool(node.process_name.strip())
+            for tab in self._tabs
+            for node in tab.project.nodes.values()
+        )
+
+    def _log_process_binding_changes(
+        self,
+        tab_title: str,
+        changes: List[Tuple[Any, int, int]],
+    ) -> None:
+        for node, old_pid, new_pid in changes:
+            if new_pid:
+                action = (
+                    f"Reconnected to PID {new_pid}"
+                    if old_pid == 0
+                    else f"Rebound (PID {old_pid} -> {new_pid})"
+                )
+                self.bottom_panel.append_log(
+                    "INFO",
+                    f"{action} for '{node.process_name}' ({tab_title}).",
+                )
+            elif old_pid:
+                self.bottom_panel.append_log(
+                    "WARN",
+                    f"Waiting for '{node.process_name}' to launch (previous PID {old_pid} exited, {tab_title}).",
+                )
+
+    def _resolve_app_capture_across_tabs(
+        self, log_reconnections: bool = True
+    ) -> List[WorkflowTabState]:
+        changed_tabs: List[WorkflowTabState] = []
+        for tab in self._tabs:
+            changes = resolve_project_process_bindings(tab.project, self._processes)
+            if changes:
+                if log_reconnections:
+                    self._log_process_binding_changes(tab.base_title(), changes)
+                changed_tabs.append(tab)
+        return changed_tabs
+
+    def _resync_running_tabs(self, tabs: List[WorkflowTabState]) -> None:
+        active_tab = self._active_tab()
+        for tab in tabs:
+            if not self._is_engine_running(tab.engine):
+                continue
+            if tab is active_tab:
+                self.sync_graph_to_engine()
+            elif tab.engine is not None:
+                ok, err = tab.engine.apply_graph(tab.project.to_engine_payload())
+                if not ok and err:
+                    self.bottom_panel.append_log(
+                        "ERROR", f"Graph sync error ({tab.base_title()}): {err}"
+                    )
+
     def refresh_devices_and_processes(self, log_feedback: bool = False) -> None:
         self._devices = self.engine.enumerate_devices()
         self._processes = self.engine.enumerate_processes()
         self._last_device_seq = self.engine.device_change_seq()
+        self._last_proc_poll_ts = time.monotonic()
 
         avail_ids = {d.id for d in self._devices}
-        active_tab = self._active_tab()
         resync_tabs: List[WorkflowTabState] = []
         for tab in self._tabs:
             tab_changed = False
@@ -957,6 +1015,10 @@ class AudioFlowMainWindow(QMainWindow):
                     if node.device_available != now_avail:
                         tab_changed = True
                     node.device_available = now_avail
+            proc_changes = resolve_project_process_bindings(tab.project, self._processes)
+            if proc_changes:
+                tab_changed = True
+                self._log_process_binding_changes(tab.base_title(), proc_changes)
             if tab_changed and self._is_engine_running(tab.engine):
                 resync_tabs.append(tab)
 
@@ -965,13 +1027,7 @@ class AudioFlowMainWindow(QMainWindow):
         self.canvas.update_catalog(self._devices, self._processes)
         self.bottom_panel.update_devices_table(self._devices)
         self.bottom_panel.push_native_logs(self.engine.poll_logs())
-        for tab in resync_tabs:
-            if tab is active_tab:
-                self.sync_graph_to_engine()
-            elif tab.engine is not None:
-                ok, err = tab.engine.apply_graph(tab.project.to_engine_payload())
-                if not ok and err:
-                    self.bottom_panel.append_log("ERROR", f"Graph sync error ({tab.base_title()}): {err}")
+        self._resync_running_tabs(resync_tabs)
         if log_feedback:
             audio_active = sum(1 for p in self._processes if p.has_audio_session)
             self.bottom_panel.append_log(
@@ -1000,6 +1056,13 @@ class AudioFlowMainWindow(QMainWindow):
         tab = self._active_tab()
         eng = tab.engine
         if eng is not None and eng.start():
+            self._processes = self.engine.enumerate_processes()
+            self._last_proc_poll_ts = time.monotonic()
+            changes = resolve_project_process_bindings(tab.project, self._processes)
+            if changes:
+                self._log_process_binding_changes(tab.base_title(), changes)
+                self.left_panel.set_processes(self._processes)
+                self.canvas.update_catalog(self._devices, self._processes)
             self._sync_run_button(True)
             self.sync_graph_to_engine()
             self._sync_tab_visual(idx, force=True)
@@ -1074,6 +1137,17 @@ class AudioFlowMainWindow(QMainWindow):
         if seq != self._last_device_seq:
             self.refresh_devices_and_processes()
             self.bottom_panel.append_log("INFO", "Windows audio device change detected; catalog updated.")
+        elif (
+            self._has_named_app_capture()
+            and (time.monotonic() - self._last_proc_poll_ts) >= 1.5
+        ):
+            self._last_proc_poll_ts = time.monotonic()
+            self._processes = self.engine.enumerate_processes()
+            changed_tabs = self._resolve_app_capture_across_tabs(log_reconnections=True)
+            if changed_tabs:
+                self.left_panel.set_processes(self._processes)
+                self.canvas.update_catalog(self._devices, self._processes)
+                self._resync_running_tabs(changed_tabs)
 
         self._refresh_active_tab_telemetry()
         seen_engines = set()
@@ -1237,6 +1311,9 @@ class AudioFlowMainWindow(QMainWindow):
                     self._tabs[idx].dirty = bool(raw.get("dirty", False)) and rest_path is not None
                     self._tabs[idx].view_state = dict(vp) if isinstance(vp, dict) else None
 
+            self._processes = self.engine.enumerate_processes()
+            self._last_proc_poll_ts = time.monotonic()
+            self._resolve_app_capture_across_tabs(log_reconnections=True)
             self.canvas.rebuild_from_project()
             self.canvas.update_catalog(self._devices, self._processes)
             if isinstance(vp, dict):
@@ -1351,6 +1428,9 @@ class AudioFlowMainWindow(QMainWindow):
                 self._tabs[idx].file_path = path
                 self._tabs[idx].dirty = False
                 self._refresh_tab_title(idx)
+            self._processes = self.engine.enumerate_processes()
+            self._last_proc_poll_ts = time.monotonic()
+            self._resolve_app_capture_across_tabs(log_reconnections=True)
             self.canvas.rebuild_from_project()
             self.canvas.update_catalog(self._devices, self._processes)
             extra = raw.get("extra") if isinstance(raw.get("extra"), dict) else {}
