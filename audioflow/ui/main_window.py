@@ -130,6 +130,9 @@ class AudioFlowMainWindow(QMainWindow):
 
     def _build_docks(self) -> None:
         self.left_dock = QDockWidget("Palette && Sources", self)
+        empty_left_title = QWidget(self.left_dock)
+        empty_left_title.setFixedHeight(0)
+        self.left_dock.setTitleBarWidget(empty_left_title)
         self.left_dock.setWidget(self.left_panel)
         self.left_dock.setMinimumWidth(220)
         self.left_dock.setMaximumWidth(340)
@@ -364,6 +367,15 @@ class AudioFlowMainWindow(QMainWindow):
         self.btn_status_terminal.clicked.connect(self.toggle_terminal_panel)
         lay.addWidget(self.btn_status_terminal)
 
+        self.btn_status_palette = QToolButton(strip)
+        self.btn_status_palette.setObjectName("TerminalToggleBtn")
+        self.btn_status_palette.setText("Node Palette")
+        self.btn_status_palette.setCheckable(True)
+        self.btn_status_palette.setChecked(True)
+        self.btn_status_palette.setToolTip("Open / Close Node Palette Sidebar")
+        self.btn_status_palette.clicked.connect(self.toggle_palette_panel)
+        lay.addWidget(self.btn_status_palette)
+
         self.lbl_status_engine = QLabel("Engine Stopped", strip)
         self.lbl_status_engine.setStyleSheet("color: #999999; font-size: 11px;")
         lay.addWidget(self.lbl_status_engine)
@@ -381,7 +393,7 @@ class AudioFlowMainWindow(QMainWindow):
     def _connect_signals(self) -> None:
         self.left_panel.add_node_requested.connect(self._on_add_node_from_palette)
         self.left_panel.refresh_requested.connect(self.refresh_devices_and_processes)
-        self.left_panel.terminal_toggle_requested.connect(self.toggle_terminal_panel)
+        self.left_panel.close_requested.connect(lambda: self.set_palette_visible(False))
 
         self.bottom_panel.close_requested.connect(lambda: self.set_terminal_visible(False))
         self.bottom_dock.visibilityChanged.connect(self._sync_terminal_toggle_state)
@@ -406,10 +418,14 @@ class AudioFlowMainWindow(QMainWindow):
             self.left_dock.raise_()
         self._sync_palette_toggle_state(visible)
 
+    def toggle_palette_panel(self) -> None:
+        self.set_palette_visible(not self.left_dock.isVisible())
+
     def _sync_palette_toggle_state(self, visible: bool) -> None:
-        self.act_toggle_palette.blockSignals(True)
-        self.act_toggle_palette.setChecked(visible)
-        self.act_toggle_palette.blockSignals(False)
+        for ctrl in (self.btn_status_palette, self.act_toggle_palette):
+            ctrl.blockSignals(True)
+            ctrl.setChecked(visible)
+            ctrl.blockSignals(False)
 
     def set_terminal_visible(self, visible: bool) -> None:
         self.bottom_dock.setVisible(visible)
@@ -421,7 +437,7 @@ class AudioFlowMainWindow(QMainWindow):
         self.set_terminal_visible(not self.bottom_dock.isVisible())
 
     def _sync_terminal_toggle_state(self, visible: bool) -> None:
-        for ctrl in (self.left_panel.btn_terminal, self.btn_status_terminal, self.act_toggle_terminal):
+        for ctrl in (self.btn_status_terminal, self.act_toggle_terminal):
             ctrl.blockSignals(True)
             ctrl.setChecked(visible)
             ctrl.blockSignals(False)

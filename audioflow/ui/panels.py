@@ -107,7 +107,7 @@ class LeftPalettePanel(QWidget):
 
     add_node_requested = Signal(int, dict)  # NodeType int, kwargs
     refresh_requested = Signal()
-    terminal_toggle_requested = Signal()
+    close_requested = Signal()
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -117,10 +117,22 @@ class LeftPalettePanel(QWidget):
         layout.setSpacing(6)
 
         hdr = QHBoxLayout()
-        hdr.addWidget(QLabel("Studio Sources & Palette"))
+        hdr.setContentsMargins(2, 0, 0, 0)
+        hdr.setSpacing(6)
+        lbl_title = QLabel("Palette & Sources")
+        lbl_title.setStyleSheet("color: #FFFFFF; font-weight: 600;")
+        hdr.addWidget(lbl_title)
+        hdr.addStretch(1)
         self.btn_refresh = QPushButton("Refresh")
         self.btn_refresh.clicked.connect(self.refresh_requested.emit)
         hdr.addWidget(self.btn_refresh)
+        self.btn_close = QToolButton(self)
+        self.btn_close.setObjectName("TerminalCloseButton")
+        self.btn_close.setText("×")
+        self.btn_close.setToolTip("Close Node Palette Sidebar")
+        self.btn_close.setAccessibleName("Close Palette")
+        self.btn_close.clicked.connect(self.close_requested.emit)
+        hdr.addWidget(self.btn_close)
         layout.addLayout(hdr)
 
         self.tabs = QTabWidget()
@@ -160,19 +172,6 @@ class LeftPalettePanel(QWidget):
         proc_lay.addWidget(QLabel("Drag onto canvas or double-click an app:"))
         proc_lay.addWidget(self.proc_list)
         self.tabs.addTab(proc_widget, "Apps")
-
-        footer = QHBoxLayout()
-        footer.setContentsMargins(0, 2, 0, 0)
-        self.btn_terminal = QToolButton(self)
-        self.btn_terminal.setObjectName("TerminalToggleBtn")
-        self.btn_terminal.setText(">_ Terminal")
-        self.btn_terminal.setCheckable(True)
-        self.btn_terminal.setChecked(True)
-        self.btn_terminal.setToolTip("Toggle Bottom Terminal Panel (Ctrl+`)")
-        self.btn_terminal.clicked.connect(lambda: self.terminal_toggle_requested.emit())
-        footer.addWidget(self.btn_terminal)
-        footer.addStretch()
-        layout.addLayout(footer)
 
         self._processes: List[ProcessInfo] = []
 
