@@ -739,6 +739,9 @@ class NodeCanvas(QGraphicsView):
             item.set_meter(meters.get(nid))
 
     def _tick_animation(self) -> None:
+        win = self.window()
+        if not self.isVisible() or (win is not None and win.isMinimized()):
+            return
         self._dash_phase = (self._dash_phase + 2.5) % 32.0
         for conn, ci in self.conn_items.items():
             m = self._last_meters.get(conn.src_node)

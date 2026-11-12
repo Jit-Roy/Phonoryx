@@ -153,8 +153,8 @@ def test_project_save_load_preserves_unavailable_device_without_fallback(tmp_pat
 
 
 def test_all_required_node_specs_present():
-    # 5 source + 10 processing + 5 output = 20 required node types
-    assert len(NODE_SPECS) == 20
+    # 5 source + 9 processing + 5 output = 19 required node types
+    assert len(NODE_SPECS) == 19
     for nt in NodeType:
         assert nt in NODE_SPECS
 

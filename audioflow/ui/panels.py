@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
+    QScrollArea,
     QSlider,
     QStackedWidget,
     QTableWidget,
@@ -381,7 +382,11 @@ class InspectorPanel(QWidget):
         form_root.addWidget(self.eq_container)
         form_root.addStretch(1)
 
-        self.stack.addWidget(editor)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setWidget(editor)
+        self.stack.addWidget(scroll)
 
     def update_catalog(self, devices: List[DeviceInfo], processes: List[ProcessInfo]) -> None:
         self._devices = devices
@@ -724,12 +729,13 @@ class BottomTelemetryPanel(QWidget):
                     bar.setRange(0, 100)
                     self.meter_table.setCellWidget(row, col, bar)
                 pct = int(min(100, max(0, val * 100)))
-                bar.setValue(pct)
-                bar.setFormat(f"{pct}%")
+                if bar.value() != pct:
+                    bar.setValue(pct)
+                    bar.setFormat(f"{pct}%")
             xrun_item = self.meter_table.item(row, 3)
             xrun_text = str(m.xruns if m else 0)
             if xrun_item is None:
                 self.meter_table.setItem(row, 3, QTableWidgetItem(xrun_text))
-            else:
+            elif xrun_item.text() != xrun_text:
                 xrun_item.setText(xrun_text)
 

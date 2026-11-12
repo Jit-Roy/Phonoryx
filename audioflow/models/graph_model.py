@@ -111,14 +111,6 @@ NODE_SPECS: Dict[NodeType, NodeSpec] = {
         ("Out",),
         "Click-free ramped mute toggle.",
     ),
-    NodeType.METER: NodeSpec(
-        NodeType.METER,
-        "Audio Meter",
-        NodeCategory.PROCESSING,
-        ("In",),
-        ("Out",),
-        "Inline stereo peak and RMS pass-through meter.",
-    ),
     NodeType.STEREO_TO_MONO: NodeSpec(
         NodeType.STEREO_TO_MONO,
         "Stereo-to-Mono",

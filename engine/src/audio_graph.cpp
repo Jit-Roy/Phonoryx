@@ -543,7 +543,6 @@ void AudioEngine::process_single_block(CompiledGraphSnapshot* snap) {
                 break;
             }
             case AF_NODE_SPLITTER:
-            case AF_NODE_METER:
             case AF_NODE_MIXER:
             default:
                 break;

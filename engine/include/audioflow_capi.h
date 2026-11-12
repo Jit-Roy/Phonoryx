@@ -48,7 +48,6 @@ typedef enum af_node_type_t {
     AF_NODE_MIXER = 103,
     AF_NODE_SPLITTER = 104,
     AF_NODE_MUTE = 105,
-    AF_NODE_METER = 106,
     AF_NODE_STEREO_TO_MONO = 107,
     AF_NODE_MONO_TO_STEREO = 108,
     AF_NODE_CHANNEL_MAP = 109,

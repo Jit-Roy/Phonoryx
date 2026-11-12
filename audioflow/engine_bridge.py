@@ -39,7 +39,6 @@ class NodeType(IntEnum):
     MIXER = 103
     SPLITTER = 104
     MUTE = 105
-    METER = 106
     STEREO_TO_MONO = 107
     MONO_TO_STEREO = 108
     CHANNEL_MAP = 109

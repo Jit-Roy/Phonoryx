@@ -8,6 +8,7 @@ from typing import List, Optional
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
+    QApplication,
     QDockWidget,
     QFileDialog,
     QMainWindow,
@@ -40,7 +41,14 @@ class AudioFlowMainWindow(QMainWindow):
     ) -> None:
         super().__init__()
         self.setWindowTitle("AudioFlow — Windows Audio Routing Studio")
-        self.resize(1460, 900)
+        init_w, init_h = 1360, 760
+        screen = QApplication.primaryScreen()
+        if screen is not None:
+            avail = screen.availableGeometry()
+            if avail.width() > 0 and avail.height() > 0:
+                init_w = min(init_w, max(640, avail.width() - 40))
+                init_h = min(init_h, max(480, avail.height() - 40))
+        self.resize(init_w, init_h)
         self.setStyleSheet(STUDIO_STYLESHEET)
 
         self.engine = engine if engine is not None else AudioFlowEngine(sample_rate=48000, block_frames=256)
@@ -85,17 +93,17 @@ class AudioFlowMainWindow(QMainWindow):
     def _build_docks(self) -> None:
         left_dock = QDockWidget("Sources & Devices", self)
         left_dock.setWidget(self.left_panel)
-        left_dock.setMinimumWidth(280)
+        left_dock.setMinimumWidth(250)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, left_dock)
 
         right_dock = QDockWidget("Node Properties", self)
         right_dock.setWidget(self.right_panel)
-        right_dock.setMinimumWidth(290)
+        right_dock.setMinimumWidth(260)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, right_dock)
 
         bottom_dock = QDockWidget("Meters, Status & Logs", self)
         bottom_dock.setWidget(self.bottom_panel)
-        bottom_dock.setMinimumHeight(200)
+        bottom_dock.setMinimumHeight(140)
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, bottom_dock)
 
     def _build_menus_and_toolbar(self) -> None:
@@ -280,10 +288,13 @@ class AudioFlowMainWindow(QMainWindow):
         meters = self.engine.get_node_meters()
         logs = self.engine.poll_logs()
 
-        self.canvas.update_meters(meters)
-        self.bottom_panel.update_telemetry(stats, self.project.nodes, meters)
         if logs:
             self.bottom_panel.push_native_logs(logs)
+        if not self.isVisible() or self.isMinimized():
+            return
+
+        self.canvas.update_meters(meters)
+        self.bottom_panel.update_telemetry(stats, self.project.nodes, meters)
 
     # ----- Workspace Cache & File Operations -----
 
