@@ -1513,6 +1513,8 @@ class NodeCanvas(QGraphicsView):
     def mousePressEvent(self, event) -> None:
         self.hide_open_popups(event.globalPosition().toPoint())
         pos = event.position().toPoint()
+        if not isinstance(self.itemAt(pos), QGraphicsProxyWidget):
+            self.setFocus(Qt.FocusReason.MouseFocusReason)
         if event.button() == Qt.MouseButton.MiddleButton:
             self._panning = True
             self._pan_moved = False

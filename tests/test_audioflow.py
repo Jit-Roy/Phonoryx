@@ -874,6 +874,16 @@ def test_comfyui_inline_node_widgets_selection_tabs_and_terminal(qapp, tmp_path:
         qapp.processEvents()
         assert win.workflow_tabs.tabText(1) == "Live Stream Routing"
 
+        # Clicking empty canvas without changing name exits inline rename mode immediately
+        win.workflow_tabs.tabBarDoubleClicked.emit(1)
+        qapp.processEvents()
+        ed3 = win._tab_rename_editor
+        assert ed3 is not None and ed3.isVisible()
+        QTest.mouseClick(canvas.viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(18, 18))
+        qapp.processEvents()
+        assert win._tab_rename_editor is None
+        assert win.workflow_tabs.tabText(1) == "Live Stream Routing"
+
         # Renaming saved tab 0 renames saved .aflow file on disk and tab title
         assert win.rename_workflow_tab(0, "master_bus")
         assert (tmp_path / "master_bus.aflow").is_file()

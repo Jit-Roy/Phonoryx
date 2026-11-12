@@ -56,20 +56,30 @@ class WorkflowTabState:
 
 
 class _TabRenameLineEdit(QLineEdit):
-    """Inline workflow tab title editor supporting Enter commit and Escape cancel."""
+    """Inline workflow tab title editor supporting Enter commit, focus-out commit, and Escape cancel."""
 
     def __init__(self, text: str, parent=None) -> None:
         super().__init__(text, parent)
         self.cancelled = False
+        self.commit_fn = None
 
     def keyPressEvent(self, event) -> None:  # noqa: N802
         if event.key() == Qt.Key.Key_Escape:
             self.cancelled = True
-            self.clearFocus()
-            self.deleteLater()
+            self.hide()
+            if self.commit_fn is not None:
+                self.commit_fn()
+            else:
+                self.clearFocus()
+                self.deleteLater()
             event.accept()
             return
         super().keyPressEvent(event)
+
+    def focusOutEvent(self, event) -> None:  # noqa: N802
+        super().focusOutEvent(event)
+        if self.commit_fn is not None:
+            self.commit_fn()
 
 
 class AudioFlowMainWindow(QMainWindow):
@@ -696,6 +706,7 @@ class AudioFlowMainWindow(QMainWindow):
             if self._tab_rename_editor is editor:
                 self._tab_rename_editor = None
             if isValid(editor):
+                editor.hide()
                 editor.deleteLater()
             if cancelled:
                 return
@@ -704,6 +715,7 @@ class AudioFlowMainWindow(QMainWindow):
                     self.rename_workflow_tab(i, new_text)
                     break
 
+        editor.commit_fn = _commit
         editor.returnPressed.connect(_commit)
         editor.editingFinished.connect(_commit)
         editor.show()
@@ -1047,6 +1059,11 @@ class AudioFlowMainWindow(QMainWindow):
         if etype == QEvent.Type.MouseButtonPress and hasattr(self, "canvas"):
             gpos = event.globalPosition().toPoint() if hasattr(event, "globalPosition") else None
             self.canvas.hide_open_popups(gpos)
+            ed = self._tab_rename_editor
+            if ed is not None and isValid(ed):
+                if gpos is None or not ed.rect().contains(ed.mapFromGlobal(gpos)):
+                    if ed.commit_fn is not None:
+                        ed.commit_fn()
         elif etype == QEvent.Type.Resize and self._ui_ready and not self._restoring_cache:
             if obj is self.left_dock and self._palette_visible and self.left_dock.width() > 0:
                 self._cached_palette_width = max(200, int(self.left_dock.width()))
