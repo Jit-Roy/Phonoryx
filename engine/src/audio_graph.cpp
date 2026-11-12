@@ -2,6 +2,7 @@
 #include "json_mini.hpp"
 
 #include <avrt.h>
+#include <mmsystem.h>
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
@@ -470,8 +471,8 @@ void AudioEngine::process_single_block(CompiledGraphSnapshot* snap) {
         if (is_source_node(node.type)) {
             if (node.test_in_ring && node.test_in_ring->available_read() >= frames) {
                 node.test_in_ring->read(work, frames);
-            } else if (node.endpoint && node.endpoint->ring().available_read() >= frames) {
-                node.endpoint->ring().read(work, frames);
+            } else if (node.endpoint) {
+                node.endpoint->read_capture_block(work, frames);
             }
 
             // Optional source gain/mute
@@ -574,31 +575,61 @@ void AudioEngine::process_single_block(CompiledGraphSnapshot* snap) {
 }
 
 void AudioEngine::rt_loop() {
+    timeBeginPeriod(1);
     DWORD task_idx = 0;
     HANDLE avrt = AvSetMmThreadCharacteristicsW(L"Pro Audio", &task_idx);
 
-    HANDLE timer = CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
+    HANDLE timer = CreateWaitableTimerExW(
+        nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
     if (!timer) {
         timer = CreateWaitableTimerW(nullptr, FALSE, nullptr);
     }
 
-    const int64_t block_100ns = (static_cast<int64_t>(block_frames_) * 10000000LL) / static_cast<int64_t>(sample_rate_);
-    const double block_us = (static_cast<double>(block_frames_) * 1e6) / static_cast<double>(sample_rate_);
-    LARGE_INTEGER due{};
-    due.QuadPart = -block_100ns;
-    const LONG period_ms = std::max<LONG>(1, static_cast<LONG>((block_frames_ * 1000) / sample_rate_));
-    if (timer) {
-        SetWaitableTimer(timer, &due, period_ms, nullptr, nullptr, FALSE);
-    }
+    const uint64_t sr = static_cast<uint64_t>(sample_rate_);
+    const uint64_t bf = static_cast<uint64_t>(block_frames_);
+    const uint64_t base_ns = (bf * 1000000000ULL) / sr;
+    const uint64_t rem_ns = (bf * 1000000000ULL) % sr;
+    const double block_us = (static_cast<double>(bf) * 1e6) / static_cast<double>(sr);
+    const auto max_catchup = std::chrono::nanoseconds(base_ns * 4);
 
+    uint64_t err_ns = 0;
+    auto next_tick = std::chrono::steady_clock::now();
     HANDLE waits[2] = {stop_event_, timer};
+
     while (running_.load(std::memory_order_acquire)) {
-        if (timer) {
-            DWORD w = WaitForMultipleObjects(2, waits, FALSE, 50);
-            if (w == WAIT_OBJECT_0) break;
-        } else {
-            if (WaitForSingleObject(stop_event_, period_ms) == WAIT_OBJECT_0) break;
+        uint64_t step_ns = base_ns;
+        err_ns += rem_ns;
+        if (err_ns >= sr) {
+            step_ns += 1;
+            err_ns -= sr;
         }
+        next_tick += std::chrono::nanoseconds(step_ns);
+
+        const auto now_before_wait = std::chrono::steady_clock::now();
+        if (now_before_wait < next_tick) {
+            const int64_t wait_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                next_tick - now_before_wait).count();
+            if (timer) {
+                const int64_t wait_100ns = std::max<int64_t>(1, wait_ns / 100);
+                LARGE_INTEGER due{};
+                due.QuadPart = -wait_100ns;
+                SetWaitableTimer(timer, &due, 0, nullptr, nullptr, FALSE);
+                const DWORD wait_timeout_ms = static_cast<DWORD>(wait_ns / 1000000LL) + 100;
+                DWORD w = WaitForMultipleObjects(2, waits, FALSE, wait_timeout_ms);
+                if (w == WAIT_OBJECT_0) break;
+            } else {
+                const DWORD ms = std::max<DWORD>(1, static_cast<DWORD>(wait_ns / 1000000LL));
+                if (WaitForSingleObject(stop_event_, ms) == WAIT_OBJECT_0) break;
+            }
+        } else {
+            if (WaitForSingleObject(stop_event_, 0) == WAIT_OBJECT_0) break;
+            if ((now_before_wait - next_tick) > max_catchup) {
+                next_tick = now_before_wait;
+                err_ns = 0;
+            }
+        }
+
+        if (!running_.load(std::memory_order_acquire)) break;
 
         const auto t0 = std::chrono::steady_clock::now();
         rt_in_flight_.fetch_add(1, std::memory_order_acquire);
@@ -617,6 +648,7 @@ void AudioEngine::rt_loop() {
 
     if (timer) CloseHandle(timer);
     if (avrt) AvRevertMmThreadCharacteristics(avrt);
+    timeEndPeriod(1);
 }
 
 bool AudioEngine::test_push_source_audio(uint64_t node_id, const float* stereo_in, size_t frames) {

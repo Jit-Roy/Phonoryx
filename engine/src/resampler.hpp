@@ -26,6 +26,17 @@ public:
         scratch_stereo_.assign(max_in_frames * 2, 0.0f);
     }
 
+    void reset() noexcept {
+        phase_ = 0.0;
+        prev_l_ = 0.0f;
+        prev_r_ = 0.0f;
+        has_prev_ = false;
+    }
+
+    bool is_phase_zero() const noexcept {
+        return std::abs(phase_) < 1e-4;
+    }
+
     /**
      * Converts raw interleaved PCM samples (1..N channels) to interleaved stereo float32
      * into preallocated scratch buffer, then resamples to out_stereo.
@@ -58,7 +69,8 @@ public:
     {
         if (in_frames == 0 || max_out_frames == 0) return 0;
 
-        if (src_rate_ == dst_rate_ && std::abs(drift_adjust - 1.0) < 1e-6) {
+        if (src_rate_ == dst_rate_ && std::abs(drift_adjust - 1.0) < 1e-6 && std::abs(phase_) < 1e-4) {
+            phase_ = 0.0;
             const size_t n = std::min(in_frames, max_out_frames);
             std::memcpy(out_stereo, in_stereo, n * 2 * sizeof(float));
             prev_l_ = in_stereo[(n - 1) * 2];
@@ -76,11 +88,10 @@ public:
 
         size_t out_count = 0;
         double pos = phase_;
-        while (out_count < max_out_frames) {
+        const double max_pos = static_cast<double>(in_frames) - 1.0;
+
+        while (out_count < max_out_frames && pos < max_pos) {
             const int64_t idx = static_cast<int64_t>(std::floor(pos));
-            if (idx >= static_cast<int64_t>(in_frames) - 1) {
-                break;
-            }
             const double frac = pos - static_cast<double>(idx);
             float l0, r0, l1, r1;
             if (idx < 0) {
@@ -103,10 +114,82 @@ public:
 
         phase_ = pos - static_cast<double>(in_frames);
         if (phase_ < -1.0) phase_ = -1.0;
-        if (phase_ > 0.0) phase_ = 0.0;
         prev_l_ = in_stereo[(in_frames - 1) * 2];
         prev_r_ = in_stereo[(in_frames - 1) * 2 + 1];
         return out_count;
+    }
+
+    size_t frames_needed_for_exact_out(size_t out_frames, double drift_adjust = 1.0) const noexcept {
+        if (out_frames == 0) return 0;
+        if (src_rate_ == dst_rate_ && std::abs(drift_adjust - 1.0) < 1e-6 && std::abs(phase_) < 1e-4) {
+            return out_frames;
+        }
+        const double step = base_ratio_ * drift_adjust;
+        const double last_pos = phase_ + static_cast<double>(out_frames - 1) * step;
+        const int64_t last_idx = static_cast<int64_t>(std::floor(last_pos));
+        const size_t min_read = (last_idx >= 0) ? static_cast<size_t>(last_idx + 2) : 1;
+        const double end_pos = phase_ + static_cast<double>(out_frames) * step;
+        const size_t consumed = (end_pos > 0.0) ? static_cast<size_t>(std::floor(end_pos)) : 0;
+        return std::max(min_read, consumed);
+    }
+
+    size_t resample_exact_out(
+        const float* in_stereo,
+        size_t in_frames,
+        float* out_stereo,
+        size_t out_frames,
+        double drift_adjust = 1.0) noexcept
+    {
+        if (out_frames == 0 || in_frames == 0) return 0;
+        if (src_rate_ == dst_rate_ && std::abs(drift_adjust - 1.0) < 1e-6 && std::abs(phase_) < 1e-4) {
+            phase_ = 0.0;
+            const size_t n = std::min(in_frames, out_frames);
+            std::memcpy(out_stereo, in_stereo, n * 2 * sizeof(float));
+            prev_l_ = in_stereo[(n - 1) * 2];
+            prev_r_ = in_stereo[(n - 1) * 2 + 1];
+            has_prev_ = true;
+            return n;
+        }
+
+        const double step = base_ratio_ * drift_adjust;
+        if (!has_prev_) {
+            prev_l_ = in_stereo[0];
+            prev_r_ = in_stereo[1];
+            has_prev_ = true;
+        }
+
+        double pos = phase_;
+        for (size_t k = 0; k < out_frames; ++k) {
+            const int64_t idx = static_cast<int64_t>(std::floor(pos));
+            const double frac = pos - static_cast<double>(idx);
+            float l0, r0, l1, r1;
+            if (idx < 0) {
+                l0 = prev_l_;
+                r0 = prev_r_;
+                l1 = in_stereo[0];
+                r1 = in_stereo[1];
+            } else {
+                const size_t i0 = std::min(static_cast<size_t>(idx), in_frames - 1);
+                const size_t i1 = std::min(i0 + 1, in_frames - 1);
+                l0 = in_stereo[i0 * 2];
+                r0 = in_stereo[i0 * 2 + 1];
+                l1 = in_stereo[i1 * 2];
+                r1 = in_stereo[i1 * 2 + 1];
+            }
+            out_stereo[k * 2] = static_cast<float>(l0 + (l1 - l0) * frac);
+            out_stereo[k * 2 + 1] = static_cast<float>(r0 + (r1 - r0) * frac);
+            pos += step;
+        }
+
+        const size_t consumed = (pos > 0.0)
+            ? std::min(in_frames, static_cast<size_t>(std::floor(pos)))
+            : 0;
+        if (consumed > 0) {
+            prev_l_ = in_stereo[(consumed - 1) * 2];
+            prev_r_ = in_stereo[(consumed - 1) * 2 + 1];
+        }
+        phase_ = pos - static_cast<double>(consumed);
+        return consumed;
     }
 
     static void convert_to_stereo_float(

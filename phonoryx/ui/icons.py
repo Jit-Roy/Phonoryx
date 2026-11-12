@@ -52,37 +52,34 @@ def _render_icon(draw_fn: Callable[[QPainter, QRectF], None], size: int = 18) ->
 
 def _draw_app_brand(p: QPainter, r: QRectF) -> None:
     w, h = r.width(), r.height()
-    # Phonoryx squircle dark emblem + amber bars + teal routing branches + white output nodes
+    # Crisp transparent branding: amber bars + neon magenta routing branches & circular output nodes
     p.setPen(Qt.PenStyle.NoPen)
-    p.setBrush(QColor("#1B1F27"))
-    p.drawRoundedRect(QRectF(0.0, 0.0, w, h), w * 0.21, h * 0.21)
-
     p.setBrush(QColor("#FFB020"))
-    for x_r, y_r, w_r, h_r in (
-        (0.12, 0.44, 0.045, 0.12),
-        (0.19, 0.39, 0.045, 0.22),
-        (0.26, 0.425, 0.045, 0.15),
-    ):
-        p.drawRoundedRect(QRectF(w * x_r, h * y_r, w * w_r, h * h_r), w * 0.022, w * 0.022)
+    bar_w = max(1.8, w * 0.085)
+    corner = bar_w * 0.45
+    p.drawRoundedRect(QRectF(w * 0.04, h * 0.38, bar_w, h * 0.24), corner, corner)
+    p.drawRoundedRect(QRectF(w * 0.16, h * 0.26, bar_w, h * 0.48), corner, corner)
+    p.drawRoundedRect(QRectF(w * 0.28, h * 0.33, bar_w, h * 0.34), corner, corner)
 
-    pen = _pen("#2DD4BF", max(1.2, w * 0.032))
+    stroke_w = max(1.8, w * 0.065)
+    pen = _pen("#FF1F8E", stroke_w)
     p.setPen(pen)
     p.setBrush(Qt.BrushStyle.NoBrush)
-    hub = QPointF(w * 0.35, h * 0.50)
-    p.drawLine(hub, QPointF(w * 0.76, h * 0.50))
-    for end_y in (0.25, 0.75):
+
+    hub = QPointF(w * 0.42, h * 0.50)
+    p.drawLine(hub, QPointF(w * 0.74, h * 0.50))
+    for end_y in (0.23, 0.77):
         branch = QPainterPath(hub)
         branch.cubicTo(
-            QPointF(w * 0.49, h * 0.50),
-            QPointF(w * 0.53, h * end_y),
-            QPointF(w * 0.76, h * end_y),
+            QPointF(w * 0.52, h * 0.50),
+            QPointF(w * 0.56, h * end_y),
+            QPointF(w * 0.74, h * end_y),
         )
         p.drawPath(branch)
 
-    p.setPen(Qt.PenStyle.NoPen)
-    p.setBrush(QColor("#F4F6FA"))
-    for y_r in (0.20, 0.45, 0.70):
-        p.drawRoundedRect(QRectF(w * 0.75, h * y_r, w * 0.11, h * 0.10), w * 0.02, w * 0.02)
+    node_r = max(2.0, w * 0.08)
+    for end_y in (0.23, 0.50, 0.77):
+        p.drawEllipse(QPointF(w * 0.84, h * end_y), node_r, node_r)
 
 
 def _draw_section_tab(p: QPainter, r: QRectF, color_hex: str, running: bool = False) -> None:

@@ -10,8 +10,8 @@ from pathlib import Path
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
-from PySide6.QtCore import QMimeData, QPoint, QPointF, Qt
-from PySide6.QtGui import QDropEvent, QWheelEvent
+from PySide6.QtCore import QEvent, QMimeData, QPoint, QPointF, Qt
+from PySide6.QtGui import QDropEvent, QIcon, QMouseEvent, QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox, QTabBar, QToolButton
 
@@ -1614,10 +1614,11 @@ def test_app_capture_auto_reconnect_on_load_poll_and_running_engine(qapp, tmp_pa
         win._poll_engine_telemetry()
         qapp.processEvents()
         assert loaded_node.pid == 8800
+        assert loaded_node.capture_pid == 8805
         assert loaded_node.process_name == "chrome.exe"
         assert "PID 8800" in node_item.cmb_process.currentText()
         assert not win._active_tab().dirty
-        assert eng.applied_graphs[-1]["nodes"][0]["pid"] == 8800
+        assert eng.applied_graphs[-1]["nodes"][0]["pid"] == 8805
     finally:
         win.close()
 
@@ -1645,6 +1646,125 @@ def test_phonoryx_branding_bundled_dll_and_localappdata_cache(qapp, monkeypatch,
         assert not win.windowIcon().isNull()
     finally:
         win.close()
+
+
+def test_dropdown_popup_selection_no_fallthrough_to_mute_and_icon_assets(qapp, tmp_path: Path):
+    """Dropdown list clicks select items without toggling mute, arrow toggles, catalog updates don't dismiss open popups, and app icons load properly."""
+    # 1. Verify app icons load properly and exist on disk
+    ico_path = Path("assets/icons/app_icon.ico")
+    png_path = Path("assets/icons/app_icon.png")
+    svg_path = Path("assets/icons/app_icon.svg")
+    assert ico_path.is_file() and ico_path.stat().st_size > 0
+    assert png_path.is_file() and png_path.stat().st_size > 0
+    assert svg_path.is_file() and svg_path.stat().st_size > 0
+
+    icon = QIcon(str(ico_path))
+    assert not icon.isNull()
+    sizes = icon.availableSizes()
+    assert len(sizes) >= 5
+
+    # 2. Setup window and canvas with APP_CAPTURE node
+    win = PhonoryxMainWindow(
+        auto_start=False,
+        cache_path=tmp_path / "dropdown_test_cache.json",
+        restore_cache=False,
+    )
+    win.show()
+    qapp.processEvents()
+    try:
+        canvas = win.canvas
+        app_node = canvas.add_node_action(NodeType.APP_CAPTURE, scene_pos=QPointF(100, 100))
+        app_item = canvas.node_items[app_node.id]
+        cmb = app_item.cmb_process
+        chk_mute = app_item.chk_mute
+        assert cmb is not None
+        assert chk_mute is not None
+        assert not chk_mute.isChecked()
+
+        # Populate with test processes
+        for p_idx in range(10):
+            cmb.addItem(f"worker_{p_idx}.exe (PID {2000 + p_idx})", (2000 + p_idx, f"worker_{p_idx}.exe"))
+
+        canvas.centerOn(app_node.x + 120, app_node.y + 70.0)
+        qapp.processEvents()
+
+        # Open popup
+        cmb.showPopup()
+        qapp.processEvents()
+        popup_view = cmb.view()
+        assert popup_view.isVisible()
+
+        # 3. Simulate clicking row 2 in the popup viewport
+        rect_row2 = popup_view.visualRect(popup_view.model().index(2, 0))
+        global_center = popup_view.viewport().mapToGlobal(rect_row2.center())
+        vp_center = canvas.viewport().mapFromGlobal(global_center)
+
+        ev_press = QMouseEvent(
+            QEvent.Type.MouseButtonPress,
+            QPointF(vp_center),
+            QPointF(global_center),
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        ev_release = QMouseEvent(
+            QEvent.Type.MouseButtonRelease,
+            QPointF(vp_center),
+            QPointF(global_center),
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.NoButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        canvas.mousePressEvent(ev_press)
+        canvas.mouseReleaseEvent(ev_release)
+        qapp.processEvents()
+
+        # Selected PID is updated
+        expected_data = cmb.itemData(2)
+        expected_pid = expected_data[0] if isinstance(expected_data, (tuple, list)) else expected_data
+        assert cmb.currentIndex() == 2
+        assert app_node.pid == expected_pid
+        assert not chk_mute.isChecked(), "Clicking in popup must never fall through to Mute checkbox"
+        assert not popup_view.isVisible()
+
+        # 4. Open dropdown again and click combobox arrow: it must toggle closed
+        cmb.showPopup()
+        qapp.processEvents()
+        assert popup_view.isVisible()
+
+        cmb_scene_center = app_item._proxy.mapToScene(QPointF(cmb.geometry().center()))
+        cmb_vp_pos = canvas.mapFromScene(cmb_scene_center)
+        cmb_global_pt = canvas.viewport().mapToGlobal(cmb_vp_pos)
+        ev_toggle_close = QMouseEvent(
+            QEvent.Type.MouseButtonPress,
+            QPointF(cmb_vp_pos),
+            QPointF(cmb_global_pt),
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        canvas.mousePressEvent(ev_toggle_close)
+        qapp.processEvents()
+        assert not popup_view.isVisible(), "Clicking combobox while open must toggle closed"
+
+        # 5. Background catalog update must NOT dismiss or wipe out an open popup list
+        cmb.showPopup()
+        qapp.processEvents()
+        assert popup_view.isVisible()
+
+        proc_list = [
+            ProcessInfo(2000 + i, 1, f"worker_{i}.exe", f"C:\\worker_{i}.exe", f"Worker {i}", True, 0.0)
+            for i in range(10)
+        ]
+        canvas.update_catalog([], proc_list)
+        qapp.processEvents()
+
+        assert popup_view.isVisible(), "Background catalog update must not close open dropdown"
+        assert cmb.count() >= 10
+        cmb.hidePopup()
+    finally:
+        win.close()
+
 
 
 

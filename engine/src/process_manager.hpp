@@ -1,7 +1,7 @@
 #pragma once
 
 #include <vector>
-#include "audioflow_capi.h"
+#include "phonoryx_capi.h"
 
 namespace af {
 

@@ -709,7 +709,7 @@ class PhonoryxMainWindow(QMainWindow):
     def _create_tab_engine(self) -> Any:
         if self._engine_factory is not None:
             return self._engine_factory()
-        return PhonoryxEngine(sample_rate=48000, block_frames=256)
+        return PhonoryxEngine(sample_rate=48000, block_frames=480)
 
     @staticmethod
     def _is_engine_running(engine: Any) -> bool:
@@ -986,7 +986,8 @@ class PhonoryxMainWindow(QMainWindow):
 
     def _has_named_app_capture(self) -> bool:
         return any(
-            node.node_type == NodeType.APP_CAPTURE and bool(node.process_name.strip())
+            node.node_type == NodeType.APP_CAPTURE
+            and (bool(node.process_name.strip()) or node.pid > 0)
             for tab in self._tabs
             for node in tab.project.nodes.values()
         )
@@ -996,12 +997,29 @@ class PhonoryxMainWindow(QMainWindow):
         tab_title: str,
         changes: List[Tuple[Any, int, int]],
     ) -> None:
+        by_pid = {p.pid: p for p in self._processes}
         for node, old_pid, new_pid in changes:
-            if new_pid:
+            if node.pid > 0 and new_pid == node.capture_pid and new_pid != node.pid:
+                child = by_pid.get(new_pid)
+                child_desc = (
+                    f"'{child.exe_name}' (PID {new_pid})"
+                    if child is not None
+                    else f"PID {new_pid}"
+                )
+                self.bottom_panel.append_log(
+                    "INFO",
+                    f"Bound WASAPI capture to active child {child_desc} for '{node.process_name}' (PID {node.pid}, {tab_title}).",
+                )
+            elif new_pid:
+                cap_suffix = (
+                    f" -> audio child PID {node.capture_pid}"
+                    if node.capture_pid and node.capture_pid != new_pid
+                    else ""
+                )
                 action = (
-                    f"Reconnected to PID {new_pid}"
+                    f"Reconnected to PID {new_pid}{cap_suffix}"
                     if old_pid == 0
-                    else f"Rebound (PID {old_pid} -> {new_pid})"
+                    else f"Rebound (PID {old_pid} -> {new_pid}{cap_suffix})"
                 )
                 self.bottom_panel.append_log(
                     "INFO",
@@ -1529,6 +1547,12 @@ class PhonoryxMainWindow(QMainWindow):
         if sys.platform != "win32":
             return
         try:
+            # Set explicit AppUserModelID so Windows Taskbar binds and groups the window icon cleanly
+            try:
+                ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("PhonoryxStudio.Phonoryx.1.0")
+            except Exception:
+                pass
+
             ico_path = os.path.join(get_base_dir(), "assets", "icons", "app_icon.ico")
             if not os.path.exists(ico_path):
                 return
@@ -1551,8 +1575,18 @@ class PhonoryxMainWindow(QMainWindow):
             ]
             _user32.SendMessageW.restype = wintypes.LPARAM
 
-            hicon_big = _user32.LoadImageW(None, ico_path, _IMAGE_ICON, 0, 0, _LR_LOADFROMFILE)
-            hicon_small = _user32.LoadImageW(None, ico_path, _IMAGE_ICON, 16, 16, _LR_LOADFROMFILE)
+            # Query exact system icon dimensions for the display's current DPI scale
+            cx_big = int(_user32.GetSystemMetrics(11) or 32)  # SM_CXICON (32, 40, 48)
+            cy_big = int(_user32.GetSystemMetrics(12) or 32)  # SM_CYICON
+            cx_sm = int(_user32.GetSystemMetrics(49) or 16)   # SM_CXSMICON (16, 20, 24)
+            cy_sm = int(_user32.GetSystemMetrics(50) or 16)   # SM_CYSMICON
+
+            hicon_big = _user32.LoadImageW(None, ico_path, _IMAGE_ICON, cx_big, cy_big, _LR_LOADFROMFILE)
+            hicon_small = _user32.LoadImageW(None, ico_path, _IMAGE_ICON, cx_sm, cy_sm, _LR_LOADFROMFILE)
+            if not hicon_big:
+                hicon_big = _user32.LoadImageW(None, ico_path, _IMAGE_ICON, 0, 0, _LR_LOADFROMFILE)
+            if not hicon_small:
+                hicon_small = _user32.LoadImageW(None, ico_path, _IMAGE_ICON, 16, 16, _LR_LOADFROMFILE)
 
             SetClassLongPtr = getattr(_user32, "SetClassLongPtrW", getattr(_user32, "SetClassLongW", None))
             if SetClassLongPtr:

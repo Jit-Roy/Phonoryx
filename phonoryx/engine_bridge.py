@@ -221,7 +221,7 @@ class PhonoryxEngine:
     def __init__(
         self,
         sample_rate: int = 48000,
-        block_frames: int = 256,
+        block_frames: int = 480,
         dll_path: Optional[Path] = None,
     ) -> None:
         resolved = dll_path if dll_path is not None else find_engine_dll()

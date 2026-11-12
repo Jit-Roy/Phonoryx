@@ -6,9 +6,11 @@
 #include "ring_buffer.hpp"
 
 #include <cassert>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -232,6 +234,130 @@ void test_windows_device_and_process_discovery() {
     std::printf("[PASS] test_windows_device_and_process_discovery\n");
 }
 
+void test_resampler_phase_continuity() {
+    constexpr double kTwoPi = 6.28318530717958647692;
+    constexpr double kFreq = 440.0;
+
+    // 1. Packetized downsampling (48000 -> 44100, step > 1.0) and upsampling (44100 -> 48000, step < 1.0)
+    struct Case {
+        uint32_t src_rate;
+        uint32_t dst_rate;
+        double drift;
+        size_t pkt_frames;
+        const char* label;
+    } cases[] = {
+        {48000, 44100, 1.0, 480, "48k->44.1k"},
+        {44100, 48000, 1.0, 441, "44.1k->48k"},
+        {48000, 48000, 1.0005, 480, "48k drift 1.0005"},
+        {48000, 48000, 0.9995, 480, "48k drift 0.9995"},
+    };
+
+    for (const auto& c : cases) {
+        af::StereoConverterResampler res;
+        res.configure(c.src_rate, c.dst_rate, 4096);
+        std::vector<float> all_out;
+        all_out.reserve(20 * 600 * 2);
+        std::vector<float> in_pkt(c.pkt_frames * 2, 0.0f);
+        std::vector<float> out_pkt(2048 * 2, 0.0f);
+
+        size_t total_in = 0;
+        for (int p = 0; p < 20; ++p) {
+            for (size_t i = 0; i < c.pkt_frames; ++i) {
+                const float s = static_cast<float>(
+                    std::sin(kTwoPi * kFreq * static_cast<double>(total_in + i) / static_cast<double>(c.src_rate)));
+                in_pkt[i * 2] = s;
+                in_pkt[i * 2 + 1] = -s;
+            }
+            total_in += c.pkt_frames;
+            const size_t n = res.resample_stereo(in_pkt.data(), c.pkt_frames, out_pkt.data(), 2048, c.drift);
+            all_out.insert(all_out.end(), out_pkt.data(), out_pkt.data() + n * 2);
+        }
+
+        const size_t total_out_frames = all_out.size() / 2;
+        CHECK(total_out_frames > 1000, c.label);
+        const double max_step = kTwoPi * kFreq / static_cast<double>(c.dst_rate) * 1.35;
+        double worst_diff = 0.0;
+        for (size_t i = 1; i < total_out_frames; ++i) {
+            const double d = std::abs(all_out[i * 2] - all_out[(i - 1) * 2]);
+            if (d > worst_diff) worst_diff = d;
+        }
+        CHECK(worst_diff < max_step, ("continuity across boundaries: " + std::string(c.label)).c_str());
+    }
+
+    // 2. Exact output ring resampling (48000 -> 44100 via peek/resample_exact_out/skip)
+    {
+        af::StereoRingBuffer rb(16384);
+        af::StereoConverterResampler res;
+        res.configure(48000, 44100, 4096);
+        std::vector<float> src_pkt(480 * 2, 0.0f);
+        std::vector<float> peek_buf(4096 * 2, 0.0f);
+        std::vector<float> out_pkt(441 * 2, 0.0f);
+        std::vector<float> all_out;
+        size_t total_in = 0;
+
+        for (int p = 0; p < 25; ++p) {
+            for (size_t i = 0; i < 480; ++i) {
+                const float s = static_cast<float>(
+                    std::sin(kTwoPi * kFreq * static_cast<double>(total_in + i) / 48000.0));
+                src_pkt[i * 2] = s;
+                src_pkt[i * 2 + 1] = s;
+            }
+            total_in += 480;
+            rb.write(src_pkt.data(), 480);
+
+            const size_t need = res.frames_needed_for_exact_out(441, 1.0);
+            if (rb.available_read() >= need) {
+                rb.peek(peek_buf.data(), need);
+                const size_t consumed = res.resample_exact_out(peek_buf.data(), need, out_pkt.data(), 441, 1.0);
+                rb.skip(consumed);
+                all_out.insert(all_out.end(), out_pkt.data(), out_pkt.data() + 441 * 2);
+            }
+        }
+
+        const size_t n_frames = all_out.size() / 2;
+        CHECK(n_frames >= 20 * 441, "exact_out produced expected continuous frames");
+        const double max_step = kTwoPi * kFreq / 44100.0 * 1.35;
+        double worst_diff = 0.0;
+        for (size_t i = 1; i < n_frames; ++i) {
+            const double d = std::abs(all_out[i * 2] - all_out[(i - 1) * 2]);
+            if (d > worst_diff) worst_diff = d;
+        }
+        CHECK(worst_diff < max_step, "exact_out continuity across render boundaries");
+    }
+
+    std::printf("[PASS] test_resampler_phase_continuity\n");
+}
+
+void test_rt_loop_timing_accuracy() {
+    // 256 frames @ 48000 Hz => 5.3333 ms/block => ~93.75 blocks in 500 ms (previously 100+ due to 5ms truncation)
+    {
+        af::AudioEngine eng(48000, 256);
+        CHECK(eng.start(), "rt_loop timing start (256)");
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        eng.stop();
+        af_engine_stats_t st{};
+        eng.get_stats(&st);
+        std::printf("  500ms @ 48000Hz/256 frames => %llu blocks (expected ~93.75)\n",
+                    static_cast<unsigned long long>(st.processed_blocks));
+        CHECK(st.processed_blocks >= 86 && st.processed_blocks <= 98, "256-frame RT cadence locked to 48kHz");
+    }
+
+    // 480 frames @ 48000 Hz => 10.000 ms/block => ~50 blocks in 500 ms
+    {
+        af::AudioEngine eng(48000, 480);
+        CHECK(eng.start(), "rt_loop timing start (480)");
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        eng.stop();
+        af_engine_stats_t st{};
+        eng.get_stats(&st);
+        std::printf("  500ms @ 48000Hz/480 frames => %llu blocks (expected ~50.0)\n",
+                    static_cast<unsigned long long>(st.processed_blocks));
+        CHECK(st.processed_blocks >= 45 && st.processed_blocks <= 54, "480-frame RT cadence locked to 48kHz");
+    }
+
+    std::printf("[PASS] test_rt_loop_timing_accuracy\n");
+}
+
 } // namespace
 
 int main() {
@@ -241,6 +367,8 @@ int main() {
     test_cycle_and_validation_rejection();
     test_dynamic_routing_preserves_active_route_and_wav();
     test_windows_device_and_process_discovery();
+    test_resampler_phase_continuity();
+    test_rt_loop_timing_accuracy();
 
     if (g_failures > 0) {
         std::fprintf(stderr, "Phonoryx C++ tests FAILED (%d failures)\n", g_failures);

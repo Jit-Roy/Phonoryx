@@ -175,6 +175,7 @@ class NodeModel:
     device_available: bool = True
     pid: int = 0
     process_name: str = ""
+    capture_pid: int = 0
     file_path: str = ""
     volume: float = 1.0
     gain_db: float = 0.0
@@ -198,7 +199,7 @@ class NodeModel:
             "id": int(self.id),
             "type": int(self.node_type),
             "device_id": self.device_id,
-            "pid": int(self.pid),
+            "pid": int(self.capture_pid or self.pid),
             "file_path": self.file_path,
             "volume": float(self.volume),
             "gain_db": float(self.gain_db),

@@ -113,8 +113,71 @@ bool WasapiEndpointWorker::start() {
     if (running_.exchange(true, std::memory_order_acq_rel)) return true;
     ResetEvent(stop_event_);
     ring_.reset();
+    rt_capture_primed_ = false;
+    rt_capture_fade_in_ = false;
     thread_ = std::thread(&WasapiEndpointWorker::thread_main, this);
     return true;
+}
+
+size_t WasapiEndpointWorker::read_capture_block(float* out_stereo, size_t frames) noexcept {
+    if (!out_stereo || frames == 0) return 0;
+
+    const size_t prebuffer = std::max<size_t>(
+        frames * 2,
+        (static_cast<size_t>(engine_sample_rate_) * 25) / 1000);
+    const size_t max_backlog = std::max<size_t>(
+        prebuffer * 6,
+        (static_cast<size_t>(engine_sample_rate_) * 160) / 1000);
+
+    size_t avail = ring_.available_read();
+    if (!rt_capture_primed_) {
+        if (avail < prebuffer) {
+            return 0;
+        }
+        if (avail > max_backlog) {
+            ring_.skip(avail - prebuffer);
+        }
+        rt_capture_primed_ = true;
+        rt_capture_fade_in_ = true;
+        avail = ring_.available_read();
+    }
+
+    if (avail > max_backlog) {
+        ring_.skip(avail - prebuffer);
+        rt_capture_fade_in_ = true;
+        avail = ring_.available_read();
+    }
+
+    if (avail < frames) {
+        ring_.record_underrun();
+        rt_capture_primed_ = false;
+        rt_capture_fade_in_ = true;
+        if (avail > 0) {
+            ring_.read(out_stereo, avail);
+            const size_t fade_len = std::min<size_t>(32, avail);
+            for (size_t i = 0; i < fade_len; ++i) {
+                const float g = static_cast<float>(fade_len - 1 - i) / static_cast<float>(fade_len);
+                const size_t idx = (avail - fade_len + i) * 2;
+                out_stereo[idx] *= g;
+                out_stereo[idx + 1] *= g;
+            }
+            std::memset(out_stereo + avail * 2, 0, (frames - avail) * 2 * sizeof(float));
+            return avail;
+        }
+        return 0;
+    }
+
+    ring_.read(out_stereo, frames);
+    if (rt_capture_fade_in_) {
+        const size_t fade_len = std::min<size_t>(64, frames);
+        for (size_t i = 0; i < fade_len; ++i) {
+            const float g = static_cast<float>(i + 1) / static_cast<float>(fade_len);
+            out_stereo[i * 2] *= g;
+            out_stereo[i * 2 + 1] *= g;
+        }
+        rt_capture_fade_in_ = false;
+    }
+    return frames;
 }
 
 void WasapiEndpointWorker::stop() {
@@ -279,7 +342,7 @@ bool WasapiEndpointWorker::run_capture_session() {
 
     resampler_.configure(src_rate, engine_sample_rate_, 16384);
     std::vector<float> converted_stereo(16384 * 2, 0.0f);
-    std::vector<float> zero_block(480 * 2, 0.0f);
+    std::vector<float> zero_block(16384 * 2, 0.0f);
 
     hr = client->Start();
     if (FAILED(hr)) {
@@ -320,17 +383,28 @@ bool WasapiEndpointWorker::run_capture_session() {
             if (FAILED(hr)) break;
 
             if (num_frames > 0) {
+                const size_t fill = ring_.available_read();
+                const size_t target = std::max<size_t>(480, (static_cast<size_t>(engine_sample_rate_) * 30) / 1000);
+                const size_t deadband = std::max<size_t>(480, (static_cast<size_t>(engine_sample_rate_) * 20) / 1000);
+                double drift = 1.0;
+                if (src_rate != engine_sample_rate_ ||
+                    fill < (target > deadband ? target - deadband : 0) ||
+                    fill > target + deadband) {
+                    const double err = static_cast<double>(fill) - static_cast<double>(target);
+                    drift = 1.0 + std::clamp(err * 2e-7, -0.0005, 0.0005);
+                }
+
                 if ((flags & AUDCLNT_BUFFERFLAGS_SILENT) != 0 || !data) {
-                    const size_t silent_out = std::min<size_t>(
-                        (static_cast<uint64_t>(num_frames) * engine_sample_rate_) / src_rate,
-                        zero_block.size() / 2);
-                    if (silent_out > 0) ring_.write(zero_block.data(), silent_out);
+                    const size_t silent_in = std::min<size_t>(num_frames, zero_block.size() / 2);
+                    if (src_rate == engine_sample_rate_ && std::abs(drift - 1.0) < 1e-6 && resampler_.is_phase_zero()) {
+                        ring_.write(zero_block.data(), silent_in);
+                    } else {
+                        const size_t produced = resampler_.resample_stereo(
+                            zero_block.data(), silent_in, converted_stereo.data(),
+                            converted_stereo.size() / 2, drift);
+                        if (produced > 0) ring_.write(converted_stereo.data(), produced);
+                    }
                 } else {
-                    const size_t fill = ring_.available_read();
-                    const size_t target = ring_.capacity() / 2;
-                    double drift = 1.0 + std::clamp(
-                        (static_cast<double>(fill) - static_cast<double>(target)) * 1e-6,
-                        -0.002, 0.002);
                     const size_t produced = resampler_.process_raw_to_stereo(
                         data, num_frames, src_channels, bits, is_float,
                         converted_stereo.data(), converted_stereo.size() / 2, drift);
@@ -420,9 +494,23 @@ bool WasapiEndpointWorker::run_render_session() {
     inspect_wave_format(mix_wfx, bits, is_float);
     CoTaskMemFree(mix_wfx);
 
-    resampler_.configure(engine_sample_rate_, dst_rate, 16384);
-    std::vector<float> pull_buf(16384 * 2, 0.0f);
-    std::vector<float> resampled_buf(16384 * 2, 0.0f);
+    const size_t buf_cap = std::max<size_t>(16384, static_cast<size_t>(buffer_frames) * 4);
+    resampler_.configure(engine_sample_rate_, dst_rate, buf_cap);
+    std::vector<float> pull_buf(buf_cap * 2, 0.0f);
+    std::vector<float> resampled_buf(buf_cap * 2, 0.0f);
+
+    const size_t prebuffer = std::max<size_t>(
+        buffer_frames / 2,
+        (static_cast<size_t>(engine_sample_rate_) * 25) / 1000);
+    const size_t max_backlog = std::max<size_t>(
+        prebuffer * 6,
+        (static_cast<size_t>(engine_sample_rate_) * 160) / 1000);
+    const size_t target = std::max<size_t>(
+        buffer_frames / 2,
+        (static_cast<size_t>(engine_sample_rate_) * 30) / 1000);
+    const size_t deadband = std::max<size_t>(
+        480,
+        (static_cast<size_t>(engine_sample_rate_) * 20) / 1000);
 
     // Pre-fill initial buffer with silence
     BYTE* init_data = nullptr;
@@ -442,6 +530,8 @@ bool WasapiEndpointWorker::run_render_session() {
 
     HANDLE handles[2] = {stop_event_, sample_event};
     bool invalidated = false;
+    bool primed = false;
+    bool fade_in = false;
 
     while (running_.load(std::memory_order_acquire)) {
         DWORD w = WaitForMultipleObjects(2, handles, FALSE, 100);
@@ -466,38 +556,92 @@ bool WasapiEndpointWorker::run_render_session() {
         }
         if (FAILED(hr) || !out_data) continue;
 
-        const size_t avail = ring_.available_read();
-        if (dst_rate == engine_sample_rate_) {
-            if (avail < frames_to_write) {
+        size_t avail = ring_.available_read();
+        if (!primed) {
+            const size_t start_threshold = std::max<size_t>(prebuffer, static_cast<size_t>(frames_to_write) + 32);
+            if (avail < start_threshold) {
                 render->ReleaseBuffer(frames_to_write, AUDCLNT_BUFFERFLAGS_SILENT);
                 continue;
             }
-            const size_t n = std::min<size_t>(frames_to_write, pull_buf.size() / 2);
-            ring_.read(pull_buf.data(), n);
-            StereoConverterResampler::convert_stereo_float_to_raw(
-                pull_buf.data(), n, dst_channels, bits, is_float, out_data);
-        } else {
-            const size_t target = ring_.capacity() / 4;
-            double drift = 1.0 + std::clamp(
-                (static_cast<double>(avail) - static_cast<double>(target)) * 1e-6,
-                -0.002, 0.002);
-            const size_t need_in = std::min<size_t>(
-                static_cast<size_t>(std::ceil(frames_to_write * (static_cast<double>(engine_sample_rate_) / dst_rate))) + 2,
-                pull_buf.size() / 2);
-            if (avail < need_in) {
-                render->ReleaseBuffer(frames_to_write, AUDCLNT_BUFFERFLAGS_SILENT);
-                continue;
+            if (avail > max_backlog) {
+                ring_.skip(avail - prebuffer);
             }
-            ring_.read(pull_buf.data(), need_in);
-            const size_t out_n = resampler_.resample_stereo(
-                pull_buf.data(), need_in, resampled_buf.data(), frames_to_write, drift);
-            if (out_n < frames_to_write) {
-                std::memset(resampled_buf.data() + out_n * 2, 0, (frames_to_write - out_n) * 2 * sizeof(float));
-            }
-            StereoConverterResampler::convert_stereo_float_to_raw(
-                resampled_buf.data(), frames_to_write, dst_channels, bits, is_float, out_data);
+            resampler_.reset();
+            primed = true;
+            fade_in = true;
+            avail = ring_.available_read();
         }
 
+        if (avail > max_backlog) {
+            ring_.skip(avail - prebuffer);
+            resampler_.reset();
+            fade_in = true;
+            avail = ring_.available_read();
+        }
+
+        double drift = 1.0;
+        if (dst_rate != engine_sample_rate_ ||
+            avail < (target > deadband ? target - deadband : 0) ||
+            avail > target + deadband) {
+            const double err = static_cast<double>(avail) - static_cast<double>(target);
+            drift = 1.0 + std::clamp(err * 2e-7, -0.0005, 0.0005);
+        }
+
+        const size_t need_in = resampler_.frames_needed_for_exact_out(frames_to_write, drift);
+        if (avail < need_in) {
+            ring_.record_underrun();
+            primed = false;
+            fade_in = true;
+            if (avail > 0) {
+                const size_t pull_n = std::min<size_t>(avail, pull_buf.size() / 2);
+                ring_.read(pull_buf.data(), pull_n);
+                const size_t produced = resampler_.resample_stereo(
+                    pull_buf.data(), pull_n, resampled_buf.data(), frames_to_write, drift);
+                if (produced > 0) {
+                    const size_t fade_len = std::min<size_t>(32, produced);
+                    for (size_t i = 0; i < fade_len; ++i) {
+                        const float g = static_cast<float>(fade_len - 1 - i) / static_cast<float>(fade_len);
+                        const size_t idx = (produced - fade_len + i) * 2;
+                        resampled_buf[idx] *= g;
+                        resampled_buf[idx + 1] *= g;
+                    }
+                }
+                if (produced < frames_to_write) {
+                    std::memset(
+                        resampled_buf.data() + produced * 2, 0,
+                        (frames_to_write - produced) * 2 * sizeof(float));
+                }
+                StereoConverterResampler::convert_stereo_float_to_raw(
+                    resampled_buf.data(), frames_to_write, dst_channels, bits, is_float, out_data);
+                resampler_.reset();
+                render->ReleaseBuffer(frames_to_write, 0);
+            } else {
+                resampler_.reset();
+                render->ReleaseBuffer(frames_to_write, AUDCLNT_BUFFERFLAGS_SILENT);
+            }
+            continue;
+        }
+
+        const size_t peek_n = std::min<size_t>(need_in, pull_buf.size() / 2);
+        ring_.peek(pull_buf.data(), peek_n);
+        const size_t consumed = resampler_.resample_exact_out(
+            pull_buf.data(), peek_n, resampled_buf.data(), frames_to_write, drift);
+        if (consumed > 0) {
+            ring_.skip(consumed);
+        }
+
+        if (fade_in) {
+            const size_t fade_len = std::min<size_t>(64, frames_to_write);
+            for (size_t i = 0; i < fade_len; ++i) {
+                const float g = static_cast<float>(i + 1) / static_cast<float>(fade_len);
+                resampled_buf[i * 2] *= g;
+                resampled_buf[i * 2 + 1] *= g;
+            }
+            fade_in = false;
+        }
+
+        StereoConverterResampler::convert_stereo_float_to_raw(
+            resampled_buf.data(), frames_to_write, dst_channels, bits, is_float, out_data);
         render->ReleaseBuffer(frames_to_write, 0);
     }
 

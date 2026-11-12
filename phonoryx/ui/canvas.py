@@ -14,6 +14,7 @@ from PySide6.QtGui import (
     QPainter,
     QPainterPath,
     QPen,
+    QMouseEvent,
     QUndoCommand,
     QUndoStack,
     QWheelEvent,
@@ -80,6 +81,7 @@ from phonoryx.ui.widget_helpers import (
     node_needs_device_selector,
     node_supports_mute,
     node_supports_volume,
+    resolve_capture_pid_for_process,
     virtual_driver_missing_text,
 )
 
@@ -114,10 +116,13 @@ class _NoWheelComboBox(QComboBox):
             container.installEventFilter(self)
 
     def wheelEvent(self, event) -> None:  # noqa: N802
+        if self.view() is not None and self.view().isVisible():
+            QApplication.sendEvent(self.view().viewport(), event)
         event.accept()
 
     def eventFilter(self, obj, event) -> bool:  # noqa: N802
         if event.type() == QEvent.Type.Wheel and obj is self.view().parentWidget() and self.view().isVisible():
+            QApplication.sendEvent(self.view().viewport(), event)
             event.accept()
             return True
         return super().eventFilter(obj, event)
@@ -128,6 +133,68 @@ class _NoWheelSlider(QSlider):
 
     def wheelEvent(self, event) -> None:  # noqa: N802
         event.ignore()
+
+
+def _is_point_inside_widget(widget: Optional[QWidget], global_pos: Optional[QPoint]) -> bool:
+    """Return True if global_pos falls inside the visible area of widget."""
+    if widget is None or global_pos is None:
+        return False
+    try:
+        if not widget.isVisible():
+            return False
+        local_pos = widget.mapFromGlobal(global_pos)
+        return widget.rect().contains(local_pos)
+    except Exception:
+        return False
+
+
+def _is_view_pos_on_combo(canvas: QGraphicsView, open_cmb: Optional[QComboBox], view_pos: Optional[QPoint]) -> bool:
+    if open_cmb is None or canvas is None or view_pos is None:
+        return False
+    try:
+        scene_pt = canvas.mapToScene(view_pos)
+        for item in canvas.items(view_pos):
+            if isinstance(item, QGraphicsProxyWidget) and item.widget() is not None:
+                local_pt = item.mapFromScene(scene_pt).toPoint()
+                w = item.widget().childAt(local_pt)
+                while w is not None:
+                    if w is open_cmb:
+                        return True
+                    if w is item.widget():
+                        break
+                    w = w.parentWidget()
+    except Exception:
+        pass
+    return False
+
+
+def _is_global_pos_on_combo(canvas: QGraphicsView, open_cmb: Optional[QComboBox], global_pos: Optional[QPoint]) -> bool:
+    if open_cmb is None or global_pos is None:
+        return False
+    try:
+        if open_cmb.isVisible() and open_cmb.rect().contains(open_cmb.mapFromGlobal(global_pos)):
+            return True
+    except Exception:
+        pass
+    try:
+        vp_pos = canvas.viewport().mapFromGlobal(global_pos)
+        return _is_view_pos_on_combo(canvas, open_cmb, vp_pos)
+    except Exception:
+        pass
+    return False
+
+
+def _is_global_pos_on_popup(open_view: Optional[QAbstractItemView], global_pos: Optional[QPoint]) -> bool:
+    if open_view is None or global_pos is None:
+        return False
+    try:
+        for target in (open_view, open_view.viewport()):
+            if target is not None and target.isVisible():
+                if target.rect().contains(target.mapFromGlobal(global_pos)):
+                    return True
+    except Exception:
+        pass
+    return False
 
 
 class PortItem(QGraphicsObject):
@@ -502,16 +569,27 @@ class NodeItem(QGraphicsObject):
         self._updating_widgets = True
         try:
             if self.cmb_device is not None:
-                self.cmb_device.clear()
-                for label, data in build_device_combo_entries(self.model, devices):
-                    self.cmb_device.addItem(label, data)
-                idx = 0
-                for i in range(self.cmb_device.count()):
-                    data = self.cmb_device.itemData(i)
-                    if data and data[0] == self.model.device_id:
-                        idx = i
-                        break
-                self.cmb_device.setCurrentIndex(idx)
+                is_open = (
+                    self.cmb_device.view() is not None
+                    and self.cmb_device.view().isVisible()
+                )
+                if not is_open:
+                    new_dev_entries = build_device_combo_entries(self.model, devices)
+                    cur_dev_entries = [
+                        (self.cmb_device.itemText(i), self.cmb_device.itemData(i))
+                        for i in range(self.cmb_device.count())
+                    ]
+                    if new_dev_entries != cur_dev_entries:
+                        self.cmb_device.clear()
+                        for label, data in new_dev_entries:
+                            self.cmb_device.addItem(label, data)
+                        idx = 0
+                        for i in range(self.cmb_device.count()):
+                            data = self.cmb_device.itemData(i)
+                            if data and data[0] == self.model.device_id:
+                                idx = i
+                                break
+                        self.cmb_device.setCurrentIndex(idx)
 
                 if self.lbl_warn is not None:
                     if not self.model.device_available and self.model.device_id:
@@ -529,12 +607,36 @@ class NodeItem(QGraphicsObject):
                             self.lbl_warn.hide()
 
             if self.cmb_process is not None:
-                self.cmb_process.clear()
-                for label, data in build_process_combo_entries(self.model, processes):
-                    self.cmb_process.addItem(label, data)
-                self.cmb_process.setCurrentIndex(
-                    matching_process_combo_index(self.cmb_process, self.model)
+                is_open = (
+                    self.cmb_process.view() is not None
+                    and self.cmb_process.view().isVisible()
                 )
+                if not is_open:
+                    new_proc_entries = build_process_combo_entries(self.model, processes)
+                    cur_proc_entries = [
+                        (self.cmb_process.itemText(i), self.cmb_process.itemData(i))
+                        for i in range(self.cmb_process.count())
+                    ]
+                    if new_proc_entries != cur_proc_entries:
+                        self.cmb_process.clear()
+                        for label, data in new_proc_entries:
+                            self.cmb_process.addItem(label, data)
+                        self.cmb_process.setCurrentIndex(
+                            matching_process_combo_index(self.cmb_process, self.model)
+                        )
+                cap_pid = self.model.capture_pid
+                if cap_pid and cap_pid != self.model.pid:
+                    child_proc = next((p for p in processes if p.pid == cap_pid), None)
+                    child_label = (
+                        f"{child_proc.exe_name} (PID {cap_pid})"
+                        if child_proc is not None
+                        else f"PID {cap_pid}"
+                    )
+                    self.cmb_process.setToolTip(
+                        f"Host: {self.model.process_name or 'PID'} (PID {self.model.pid}) -> Capturing child audio {child_label}"
+                    )
+                else:
+                    self.cmb_process.setToolTip("")
         finally:
             self._updating_widgets = False
 
@@ -590,6 +692,9 @@ class NodeItem(QGraphicsObject):
         if data:
             self.model.pid = int(data[0])
             self.model.process_name = str(data[1])
+            self.model.capture_pid = resolve_capture_pid_for_process(
+                self.model.pid, self.canvas.processes
+            )
             self.canvas.graph_changed.emit()
             self.update()
 
@@ -1378,6 +1483,8 @@ class NodeCanvas(QGraphicsView):
             y=float(scene_pos.y()),
             **kwargs,
         )
+        if node.node_type == NodeType.APP_CAPTURE and node.pid > 0 and not node.capture_pid:
+            node.capture_pid = resolve_capture_pid_for_process(node.pid, self.processes)
         self.undo_stack.push(AddNodeCommand(self, node))
         return node
 
@@ -1636,51 +1743,57 @@ class NodeCanvas(QGraphicsView):
         self._update_zoom_label()
         self._emit_viewport_changed()
 
-    def _find_open_combo_view(self) -> Optional[QAbstractItemView]:
+    def _find_open_combo(self) -> Tuple[Optional[QComboBox], Optional[QAbstractItemView]]:
         for item in self.node_items.values():
             for cmb in (item.cmb_device, item.cmb_process, item.cmb_map_l, item.cmb_map_r):
                 if cmb is not None and cmb.view() is not None and cmb.view().isVisible():
-                    return cmb.view()
-        return None
+                    return cmb, cmb.view()
+        return None, None
+
+    def _find_open_combo_view(self) -> Optional[QAbstractItemView]:
+        _, view = self._find_open_combo()
+        return view
 
     def hide_open_popups(self, global_pos: Optional[QPoint] = None) -> bool:
         """Dismiss any open inline node combo dropdown when clicking outside it (ComfyUI pointerdown rule)."""
-        dismissed = False
-        for item in self.node_items.values():
-            for cmb in (item.cmb_device, item.cmb_process, item.cmb_map_l, item.cmb_map_r):
-                if cmb is not None and cmb.view() is not None and cmb.view().isVisible():
-                    popup_win = cmb.view().window()
-                    if (
-                        global_pos is None
-                        or popup_win is None
-                        or not popup_win.geometry().contains(global_pos)
-                    ):
-                        cmb.hidePopup()
-                        dismissed = True
-        return dismissed
+        open_cmb, open_view = self._find_open_combo()
+        if open_cmb is None or open_view is None:
+            return False
+
+        if global_pos is None:
+            open_cmb.hidePopup()
+            return True
+
+        if _is_global_pos_on_combo(self, open_cmb, global_pos) or _is_global_pos_on_popup(open_view, global_pos):
+            return False
+
+        open_cmb.hidePopup()
+        return True
 
     def _is_wheel_over_dropdown(self, view_pos: QPoint) -> bool:
-        if QApplication.activePopupWidget() is not None:
-            return True
-        item = self.itemAt(view_pos)
-        if isinstance(item, QGraphicsProxyWidget) and item.widget() is not None:
-            scene_pt = self.mapToScene(view_pos)
-            local_pt = item.mapFromScene(scene_pt).toPoint()
-            w = item.widget().childAt(local_pt)
-            while w is not None:
-                if isinstance(w, (QComboBox, QAbstractItemView)):
-                    return True
-                if w is item.widget():
-                    break
-                w = w.parentWidget()
+        scene_pt = self.mapToScene(view_pos)
+        for item in self.items(view_pos):
+            if isinstance(item, QGraphicsProxyWidget) and item.widget() is not None:
+                local_pt = item.mapFromScene(scene_pt).toPoint()
+                w = item.widget().childAt(local_pt)
+                while w is not None:
+                    if isinstance(w, (QComboBox, QAbstractItemView)):
+                        return True
+                    if w is item.widget():
+                        break
+                    w = w.parentWidget()
         return False
 
     def wheelEvent(self, event) -> None:
-        open_view = self._find_open_combo_view()
-        if open_view is not None:
-            popup_win = open_view.window()
+        open_cmb, open_view = self._find_open_combo()
+        if open_cmb is not None and open_view is not None:
+            view_pt = event.position().toPoint()
             global_pt = event.globalPosition().toPoint()
-            if popup_win is not None and popup_win.geometry().contains(global_pt):
+            if (
+                _is_view_pos_on_combo(self, open_cmb, view_pt)
+                or _is_global_pos_on_combo(self, open_cmb, global_pt)
+                or _is_global_pos_on_popup(open_view, global_pt)
+            ):
                 vp = open_view.viewport()
                 local_pos = QPointF(vp.mapFromGlobal(global_pt))
                 mapped = QWheelEvent(
@@ -1694,8 +1807,10 @@ class NodeCanvas(QGraphicsView):
                     event.inverted(),
                 )
                 QApplication.sendEvent(vp, mapped)
-            event.accept()
-            return
+                event.accept()
+                return
+
+            open_cmb.hidePopup()
 
         if self._is_wheel_over_dropdown(event.position().toPoint()):
             event.accept()
@@ -1780,7 +1895,40 @@ class NodeCanvas(QGraphicsView):
         super().dropEvent(event)
 
     def mousePressEvent(self, event) -> None:
-        self.hide_open_popups(event.globalPosition().toPoint())
+        view_pos = event.position().toPoint()
+        global_pos = event.globalPosition().toPoint()
+        open_cmb, open_view = self._find_open_combo()
+        if open_cmb is not None:
+            in_cmb = (
+                _is_view_pos_on_combo(self, open_cmb, view_pos)
+                or _is_global_pos_on_combo(self, open_cmb, global_pos)
+            )
+            in_popup = _is_global_pos_on_popup(open_view, global_pos)
+
+            if in_cmb:
+                # User clicked on the open combobox/arrow to toggle it closed
+                open_cmb.hidePopup()
+                event.accept()
+                return
+
+            if in_popup and open_view is not None:
+                # Forward mouse press to popup list viewport so item is clicked/selected cleanly
+                vp = open_view.viewport()
+                local_pos = QPointF(vp.mapFromGlobal(global_pos))
+                mapped = QMouseEvent(
+                    event.type(),
+                    local_pos,
+                    event.globalPosition(),
+                    event.button(),
+                    event.buttons(),
+                    event.modifiers(),
+                )
+                QApplication.sendEvent(vp, mapped)
+                event.accept()
+                return
+
+            open_cmb.hidePopup()
+
         pos = event.position().toPoint()
         if not isinstance(self.itemAt(pos), QGraphicsProxyWidget):
             self.setFocus(Qt.FocusReason.MouseFocusReason)
@@ -1933,6 +2081,33 @@ class NodeCanvas(QGraphicsView):
                 self.undo_stack.push(RemoveSelectionCommand(self, [], [detaching]))
             event.accept()
             return
+
+        open_cmb, open_view = self._find_open_combo()
+        if open_cmb is not None and open_view is not None:
+            view_pos = event.position().toPoint()
+            global_pos = event.globalPosition().toPoint()
+            in_cmb = (
+                _is_view_pos_on_combo(self, open_cmb, view_pos)
+                or _is_global_pos_on_combo(self, open_cmb, global_pos)
+            )
+            in_popup = _is_global_pos_on_popup(open_view, global_pos)
+            if in_popup:
+                vp = open_view.viewport()
+                local_pos = QPointF(vp.mapFromGlobal(global_pos))
+                mapped = QMouseEvent(
+                    event.type(),
+                    local_pos,
+                    event.globalPosition(),
+                    event.button(),
+                    event.buttons(),
+                    event.modifiers(),
+                )
+                QApplication.sendEvent(vp, mapped)
+                event.accept()
+                return
+            if in_cmb:
+                event.accept()
+                return
 
         super().mouseReleaseEvent(event)
         if self.dragMode() != QGraphicsView.DragMode.NoDrag:

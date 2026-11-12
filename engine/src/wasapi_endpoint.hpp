@@ -40,6 +40,7 @@ public:
     void stop();
 
     StereoRingBuffer& ring() noexcept { return ring_; }
+    size_t read_capture_block(float* out_stereo, size_t frames) noexcept;
     bool is_connected() const noexcept { return connected_.load(std::memory_order_acquire); }
     uint32_t xruns() const noexcept {
         return ring_.underruns() + ring_.overruns();
@@ -63,6 +64,8 @@ private:
     HANDLE stop_event_{nullptr};
     std::atomic<bool> running_{false};
     std::atomic<bool> connected_{false};
+    bool rt_capture_primed_{false};
+    bool rt_capture_fade_in_{false};
     std::thread thread_;
 };
 

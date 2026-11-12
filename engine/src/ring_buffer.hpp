@@ -7,7 +7,7 @@
 #include <algorithm>
 #include <chrono>
 
-#include "audioflow_capi.h"
+#include "phonoryx_capi.h"
 
 namespace af {
 
@@ -82,6 +82,38 @@ public:
             underruns_.fetch_add(1, std::memory_order_relaxed);
         }
         return to_read;
+    }
+
+    size_t peek(float* out_interleaved_stereo, size_t frames) const noexcept {
+        const size_t w = write_idx_.load(std::memory_order_acquire);
+        const size_t r = read_idx_.load(std::memory_order_relaxed);
+        const size_t avail = w - r;
+        const size_t to_read = std::min(frames, avail);
+        if (to_read > 0) {
+            const size_t pos = r & mask_;
+            const size_t first = std::min(to_read, capacity_ - pos);
+            std::memcpy(out_interleaved_stereo, &data_[pos * 2], first * 2 * sizeof(float));
+            const size_t second = to_read - first;
+            if (second > 0) {
+                std::memcpy(out_interleaved_stereo + first * 2, &data_[0], second * 2 * sizeof(float));
+            }
+        }
+        return to_read;
+    }
+
+    size_t skip(size_t frames) noexcept {
+        const size_t w = write_idx_.load(std::memory_order_acquire);
+        const size_t r = read_idx_.load(std::memory_order_relaxed);
+        const size_t avail = w - r;
+        const size_t to_skip = std::min(frames, avail);
+        if (to_skip > 0) {
+            read_idx_.store(r + to_skip, std::memory_order_release);
+        }
+        return to_skip;
+    }
+
+    void record_underrun() noexcept {
+        underruns_.fetch_add(1, std::memory_order_relaxed);
     }
 
     void reset() noexcept {

@@ -10,7 +10,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include "audioflow_capi.h"
+#include "phonoryx_capi.h"
 #include "device_manager.hpp"
 #include "dsp_nodes.hpp"
 #include "ring_buffer.hpp"
@@ -69,7 +69,7 @@ struct CompiledGraphSnapshot {
 };
 
 /**
- * Master real-time AudioFlow engine & graph manager.
+ * Master real-time Phonoryx engine & graph manager.
  */
 class AudioEngine {
 public:

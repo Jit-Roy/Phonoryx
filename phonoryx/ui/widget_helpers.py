@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from phonoryx.engine_bridge import DataFlow, DeviceInfo, NodeType, ProcessInfo
 from phonoryx.models.graph_model import NodeModel, ProjectModel
@@ -124,10 +124,93 @@ def build_process_combo_entries(
     return entries
 
 
+def _build_process_tree_index(
+    processes: List[ProcessInfo],
+) -> Tuple[Dict[int, ProcessInfo], Dict[int, List[ProcessInfo]]]:
+    """Index processes by PID and parent PID for descendant-tree traversal."""
+    by_pid: Dict[int, ProcessInfo] = {}
+    children_by_ppid: Dict[int, List[ProcessInfo]] = {}
+    for proc in processes:
+        by_pid[proc.pid] = proc
+        if proc.parent_pid > 0 and proc.parent_pid != proc.pid:
+            children_by_ppid.setdefault(proc.parent_pid, []).append(proc)
+    return by_pid, children_by_ppid
+
+
+def _collect_subtree(
+    root_pid: int,
+    by_pid: Dict[int, ProcessInfo],
+    children_by_ppid: Dict[int, List[ProcessInfo]],
+) -> List[Tuple[int, ProcessInfo]]:
+    """Return ``(depth, ProcessInfo)`` pairs for ``root_pid`` and all descendants."""
+    root = by_pid.get(root_pid)
+    if root is None:
+        return []
+    visited = {root_pid}
+    out: List[Tuple[int, ProcessInfo]] = [(0, root)]
+    queue: List[Tuple[int, int]] = [(0, root_pid)]
+    head = 0
+    while head < len(queue):
+        depth, pid = queue[head]
+        head += 1
+        for child in children_by_ppid.get(pid, ()):
+            if child.pid in visited:
+                continue
+            visited.add(child.pid)
+            out.append((depth + 1, child))
+            queue.append((depth + 1, child.pid))
+    return out
+
+
+def resolve_capture_pid_for_process(
+    selected_pid: int,
+    processes: List[ProcessInfo],
+    _index: Optional[Tuple[Dict[int, ProcessInfo], Dict[int, List[ProcessInfo]]]] = None,
+) -> int:
+    """Resolve the WASAPI capture PID for ``selected_pid`` across its descendant tree.
+
+    Walks all descendant processes (regardless of executable name). If a descendant
+    (such as a sandboxed Chromium/WebView2 ``AudioService`` or child runtime) holds
+    an active WASAPI audio session while the parent itself has no separate non-zero
+    render stream, binds capture to the best active descendant PID. Otherwise keeps
+    ``selected_pid`` for standard ``INCLUDE_TARGET_PROCESS_TREE`` capture.
+    """
+    if selected_pid <= 0:
+        return selected_pid
+    by_pid, children_by_ppid = _index if _index is not None else _build_process_tree_index(processes)
+    if selected_pid not in by_pid:
+        return selected_pid
+
+    subtree = _collect_subtree(selected_pid, by_pid, children_by_ppid)
+    root_proc = by_pid[selected_pid]
+    root_name = root_proc.exe_name.strip().lower()
+    audio_descendants = [
+        (depth, proc) for depth, proc in subtree if depth > 0 and proc.has_audio_session
+    ]
+    if not audio_descendants:
+        return selected_pid
+
+    descendant_has_peak = any(proc.session_peak > 0.0 for _, proc in audio_descendants)
+    if root_proc.has_audio_session and root_proc.session_peak > 0.0 and not descendant_has_peak:
+        return selected_pid
+
+    _, best_proc = max(
+        audio_descendants,
+        key=lambda item: (
+            item[1].session_peak > 0.0,
+            item[1].session_peak,
+            item[1].exe_name.strip().lower() != root_name,
+            item[0],
+            -item[1].pid,
+        ),
+    )
+    return best_proc.pid
+
+
 def select_best_process_for_name(
     process_name: str, processes: List[ProcessInfo]
 ) -> Optional[ProcessInfo]:
-    """Pick the best live process matching ``process_name`` (preferring tree roots)."""
+    """Pick the best live process tree matching ``process_name``, preferring active audio trees."""
     target = process_name.strip().lower()
     if not target:
         return None
@@ -135,19 +218,25 @@ def select_best_process_for_name(
     if not matches:
         return None
 
+    by_pid, children_by_ppid = _build_process_tree_index(processes)
     match_pids = {p.pid for p in matches}
     child_counts = {p.pid: 0 for p in matches}
     for proc in matches:
         if proc.parent_pid in child_counts:
             child_counts[proc.parent_pid] += 1
 
-    def _score(proc: ProcessInfo) -> Tuple[bool, bool, bool, bool, float, int]:
+    def _score(proc: ProcessInfo) -> Tuple[bool, float, bool, bool, bool, bool, int]:
+        subtree = _collect_subtree(proc.pid, by_pid, children_by_ppid)
+        tree_has_peak = any(child.session_peak > 0.0 for _, child in subtree)
+        tree_max_peak = max((child.session_peak for _, child in subtree), default=0.0)
+        tree_has_audio = any(child.has_audio_session for _, child in subtree)
         return (
+            tree_has_peak,
+            tree_max_peak,
+            tree_has_audio,
             proc.parent_pid not in match_pids,
             child_counts.get(proc.pid, 0) > 0,
             bool(proc.window_title.strip()),
-            proc.has_audio_session,
-            proc.session_peak,
             -proc.pid,
         )
 
@@ -157,38 +246,51 @@ def select_best_process_for_name(
 def resolve_project_process_bindings(
     project: ProjectModel, processes: List[ProcessInfo]
 ) -> List[Tuple[NodeModel, int, int]]:
-    """Resolve APP_CAPTURE nodes by ``process_name`` against live ``processes``.
+    """Resolve APP_CAPTURE nodes by ``process_name`` and descendant audio sessions.
 
-    Returns ``(node, old_pid, new_pid)`` tuples for nodes whose PID changed.
-    Preserves ``node.process_name`` when the target application is not running so
-    it can reconnect automatically once launched.
+    Preserves the selected host app identity (``node.pid`` and ``node.process_name``)
+    in the project while updating ``node.capture_pid`` to an active descendant
+    WASAPI audio child when present. Returns ``(node, old_pid, new_pid)`` tuples
+    whenever host or capture PID bindings change.
     """
-    by_pid = {p.pid: p for p in processes}
+    proc_index = _build_process_tree_index(processes)
+    by_pid = proc_index[0]
     changes: List[Tuple[NodeModel, int, int]] = []
     for node in project.nodes.values():
         if node.node_type != NodeType.APP_CAPTURE:
             continue
-        old_pid = node.pid
+        old_host_pid = node.pid
+        old_capture_pid = node.capture_pid or node.pid
         target_name = node.process_name.strip()
 
-        if old_pid > 0 and old_pid in by_pid:
-            live = by_pid[old_pid]
+        host_alive = False
+        if old_host_pid > 0 and old_host_pid in by_pid:
+            live = by_pid[old_host_pid]
             if not target_name:
                 node.process_name = live.exe_name
-                continue
-            if live.exe_name.strip().lower() == target_name.lower():
-                continue
+                host_alive = True
+            elif live.exe_name.strip().lower() == target_name.lower():
+                host_alive = True
 
-        if not target_name:
-            continue
+        if not host_alive and target_name:
+            best = select_best_process_for_name(target_name, processes)
+            new_host_pid = best.pid if best is not None else 0
+            if best is not None:
+                node.process_name = best.exe_name
+            node.pid = new_host_pid
 
-        best = select_best_process_for_name(target_name, processes)
-        new_pid = best.pid if best is not None else 0
-        if best is not None:
-            node.process_name = best.exe_name
-        if new_pid != old_pid:
-            node.pid = new_pid
-            changes.append((node, old_pid, new_pid))
+        if node.pid > 0 and node.pid in by_pid:
+            new_capture_pid = resolve_capture_pid_for_process(
+                node.pid, processes, _index=proc_index
+            )
+        else:
+            new_capture_pid = node.pid
+
+        node.capture_pid = new_capture_pid
+        if node.pid != old_host_pid:
+            changes.append((node, old_host_pid, node.pid))
+        elif node.pid > 0 and new_capture_pid != old_capture_pid:
+            changes.append((node, old_capture_pid, new_capture_pid))
     return changes
 
 

@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-#include "audioflow_capi.h"
+#include "phonoryx_capi.h"
 #include "ring_buffer.hpp"
 
 namespace af {

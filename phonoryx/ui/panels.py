@@ -55,6 +55,7 @@ from phonoryx.ui.widget_helpers import (
     build_device_combo_entries,
     build_process_combo_entries,
     matching_process_combo_index,
+    resolve_capture_pid_for_process,
     virtual_driver_missing_text,
 )
 
@@ -546,6 +547,9 @@ class InspectorPanel(QWidget):
         if data:
             self._node.pid = int(data[0])
             self._node.process_name = str(data[1])
+            self._node.capture_pid = resolve_capture_pid_for_process(
+                self._node.pid, self._processes
+            )
             self.graph_rebuild_needed.emit()
 
     def _browse_wav(self) -> None:
