@@ -414,6 +414,9 @@ QWidget#NodeInlineWidgetRoot QLabel {{
     font-size: 11px;
     background-color: transparent;
 }}
+QWidget#NodeInlineWidgetRoot QComboBox {{
+    combobox-popup: 0;
+}}
 QWidget#NodeInlineWidgetRoot QComboBox,
 QWidget#NodeInlineWidgetRoot QLineEdit {{
     background-color: {COMFY_INPUT_BG};

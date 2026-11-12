@@ -55,6 +55,23 @@ class WorkflowTabState:
         return f"{name} *" if self.dirty else name
 
 
+class _TabRenameLineEdit(QLineEdit):
+    """Inline workflow tab title editor supporting Enter commit and Escape cancel."""
+
+    def __init__(self, text: str, parent=None) -> None:
+        super().__init__(text, parent)
+        self.cancelled = False
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802
+        if event.key() == Qt.Key.Key_Escape:
+            self.cancelled = True
+            self.clearFocus()
+            self.deleteLater()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+
 class AudioFlowMainWindow(QMainWindow):
     """Studio main window with ComfyUI workflow tabs, inline node canvas, and closable terminal."""
 
@@ -93,6 +110,7 @@ class AudioFlowMainWindow(QMainWindow):
             WorkflowTabState(tab_id=self._next_tab_seq, title="Untitled Workflow", project=self.project)
         ]
         self._active_tab_id: int = self._tabs[0].tab_id
+        self._tab_rename_editor: Optional[_TabRenameLineEdit] = None
 
         self._devices: List[DeviceInfo] = []
         self._processes: List[ProcessInfo] = []
@@ -283,6 +301,7 @@ class AudioFlowMainWindow(QMainWindow):
         self._add_workflow_tab_item(self._tabs[0])
         self.workflow_tabs.currentChanged.connect(self._on_workflow_tab_changed)
         self.workflow_tabs.tabMoved.connect(self._on_workflow_tab_moved)
+        self.workflow_tabs.tabBarDoubleClicked.connect(self._begin_tab_rename)
         top_lay.addWidget(self.workflow_tabs)
 
         self.btn_new_tab = QToolButton(self.top_bar)
@@ -507,6 +526,77 @@ class AudioFlowMainWindow(QMainWindow):
             tab = self._tabs.pop(from_idx)
             self._tabs.insert(to_idx, tab)
 
+    def _begin_tab_rename(self, idx: int) -> None:
+        if not (0 <= idx < len(self._tabs)):
+            return
+        if self._tab_rename_editor is not None and isValid(self._tab_rename_editor):
+            self._tab_rename_editor.cancelled = True
+            self._tab_rename_editor.deleteLater()
+            self._tab_rename_editor = None
+
+        tab = self._tabs[idx]
+        target_tab_id = tab.tab_id
+        editor = _TabRenameLineEdit(tab.base_title(), self.workflow_tabs)
+        editor.setGeometry(self.workflow_tabs.tabRect(idx).adjusted(4, 3, -24, -4))
+        editor.setStyleSheet(
+            "background-color: #222222; color: #FFFFFF; border: 1px solid #31B9F4; "
+            "border-radius: 4px; padding: 0px 4px; font-size: 12px;"
+        )
+        self._tab_rename_editor = editor
+        done = False
+
+        def _commit() -> None:
+            nonlocal done
+            if done:
+                return
+            done = True
+            cancelled = editor.cancelled
+            new_text = editor.text()
+            if self._tab_rename_editor is editor:
+                self._tab_rename_editor = None
+            if isValid(editor):
+                editor.deleteLater()
+            if cancelled:
+                return
+            for i, t in enumerate(self._tabs):
+                if t.tab_id == target_tab_id:
+                    self.rename_workflow_tab(i, new_text)
+                    break
+
+        editor.returnPressed.connect(_commit)
+        editor.editingFinished.connect(_commit)
+        editor.show()
+        editor.selectAll()
+        editor.setFocus()
+
+    def rename_workflow_tab(self, idx: int, new_name: str) -> bool:
+        if not (0 <= idx < len(self._tabs)):
+            return False
+        tab = self._tabs[idx]
+        clean = new_name.strip().replace("/", "_").replace("\\", "_")
+        if not clean or clean == tab.base_title():
+            return False
+        if tab.file_path is not None:
+            target = tab.file_path.with_name(f"{clean}{tab.file_path.suffix}")
+            if target != tab.file_path:
+                if target.exists():
+                    QMessageBox.warning(
+                        self,
+                        "Rename Workflow",
+                        f"A workflow file named '{target.name}' already exists.",
+                    )
+                    return False
+                if tab.file_path.is_file():
+                    tab.file_path.rename(target)
+                tab.file_path = target
+                if idx == self.workflow_tabs.currentIndex():
+                    self.project_path = target
+        tab.title = clean
+        self._refresh_tab_title(idx)
+        if idx == self.workflow_tabs.currentIndex():
+            self.schedule_cache_save()
+        return True
+
     def _add_workflow_tab_item(self, tab: WorkflowTabState) -> int:
         idx = self.workflow_tabs.addTab(tab.display_title())
         close_btn = QToolButton(self.workflow_tabs)
@@ -680,6 +770,7 @@ class AudioFlowMainWindow(QMainWindow):
                     pass
             data = self.project.to_project_dict()
             data["viewport"] = self.canvas.get_view_state()
+            data["workflow_title"] = self._active_tab().title
             self.cache_path.parent.mkdir(parents=True, exist_ok=True)
             self.cache_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
             self._cache_dirty = False
@@ -702,6 +793,9 @@ class AudioFlowMainWindow(QMainWindow):
             self.sync_graph_to_engine()
             idx = self.workflow_tabs.currentIndex()
             if 0 <= idx < len(self._tabs):
+                saved_title = raw.get("workflow_title")
+                if isinstance(saved_title, str) and saved_title.strip():
+                    self._tabs[idx].title = saved_title.strip()
                 self._tabs[idx].dirty = False
                 self._tabs[idx].view_state = dict(vp) if isinstance(vp, dict) else None
                 self._refresh_tab_title(idx)

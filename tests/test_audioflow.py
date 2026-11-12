@@ -11,7 +11,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 from PySide6.QtCore import QMimeData, QPoint, QPointF, Qt
-from PySide6.QtGui import QDropEvent
+from PySide6.QtGui import QDropEvent, QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QMessageBox, QToolButton
 
@@ -726,6 +726,88 @@ def test_comfyui_inline_node_widgets_selection_tabs_and_terminal(qapp, tmp_path:
         eq_node_item.eq_sliders[0].setValue(35)
         assert eq_node.eq_gains_db[0] == pytest.approx(3.5)
         assert "dB" in eq_node_item.lbl_eq_vals[0].text()
+
+        # 9. Wheel over dropdown button or open dropdown list scrolls list & NEVER zooms canvas
+        app_node = next(n for n in created_ids if n.node_type == NodeType.APP_CAPTURE)
+        app_item = canvas.node_items[app_node.id]
+        cmb = app_item.cmb_process
+        assert cmb is not None
+        for p_idx in range(35):
+            cmb.addItem(f"app_{p_idx:02d}.exe (PID {100 + p_idx})", (100 + p_idx, f"app_{p_idx:02d}.exe"))
+        canvas.centerOn(app_node.x + NODE_WIDTH / 2.0, app_node.y + 70.0)
+        qapp.processEvents()
+        zoom_before = canvas.transform().m11()
+
+        # Hovering closed dropdown box: wheel must not change selection or zoom canvas
+        cmb_scene_center = app_item._proxy.mapToScene(QPointF(cmb.geometry().center()))
+        cmb_vp_pos = canvas.mapFromScene(cmb_scene_center)
+        closed_wheel = QWheelEvent(
+            QPointF(cmb_vp_pos),
+            QPointF(canvas.viewport().mapToGlobal(cmb_vp_pos)),
+            QPoint(0, 0),
+            QPoint(0, -120),
+            Qt.MouseButton.NoButton,
+            Qt.KeyboardModifier.NoModifier,
+            Qt.ScrollPhase.NoScrollPhase,
+            False,
+        )
+        QApplication.sendEvent(canvas.viewport(), closed_wheel)
+        qapp.processEvents()
+        assert canvas.transform().m11() == pytest.approx(zoom_before)
+        assert app_node.pid == 0
+
+        # Open dropdown list: wheel must scroll the list (NOT zoom canvas)
+        cmb.showPopup()
+        qapp.processEvents()
+        popup_view = cmb.view()
+        popup_scroll_before = popup_view.verticalScrollBar().value()
+        assert popup_view.verticalScrollBar().maximum() > 0
+        popup_global = popup_view.viewport().mapToGlobal(popup_view.viewport().rect().center())
+        popup_vp_pos = canvas.viewport().mapFromGlobal(popup_global)
+        open_wheel = QWheelEvent(
+            QPointF(popup_vp_pos),
+            QPointF(popup_global),
+            QPoint(0, 0),
+            QPoint(0, -240),
+            Qt.MouseButton.NoButton,
+            Qt.KeyboardModifier.NoModifier,
+            Qt.ScrollPhase.NoScrollPhase,
+            False,
+        )
+        QApplication.sendEvent(canvas.viewport(), open_wheel)
+        qapp.processEvents()
+        assert canvas.transform().m11() == pytest.approx(zoom_before)
+        assert popup_view.verticalScrollBar().value() > popup_scroll_before
+        cmb.hidePopup()
+        qapp.processEvents()
+
+        # 10. Double-clicking workflow tab header renames workflow (inline editor + file rename)
+        win.workflow_tabs.setCurrentIndex(1)
+        qapp.processEvents()
+        win.workflow_tabs.tabBarDoubleClicked.emit(1)
+        qapp.processEvents()
+        ed = win._tab_rename_editor
+        assert ed is not None
+        ed.setText("Live Stream Routing")
+        QTest.keyClick(ed, Qt.Key.Key_Return)
+        qapp.processEvents()
+        assert win.workflow_tabs.tabText(1) == "Live Stream Routing"
+
+        # Escape cancels inline rename
+        win.workflow_tabs.tabBarDoubleClicked.emit(1)
+        qapp.processEvents()
+        ed2 = win._tab_rename_editor
+        assert ed2 is not None
+        ed2.setText("Should Cancel")
+        QTest.keyClick(ed2, Qt.Key.Key_Escape)
+        qapp.processEvents()
+        assert win.workflow_tabs.tabText(1) == "Live Stream Routing"
+
+        # Renaming saved tab 0 renames saved .aflow file on disk and tab title
+        assert win.rename_workflow_tab(0, "master_bus")
+        assert (tmp_path / "master_bus.aflow").is_file()
+        assert not save_path.exists()
+        assert win.workflow_tabs.tabText(0) == "master_bus *"
     finally:
         win.close()
 

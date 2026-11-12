@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Dict, Iterable, List, Optional, Tuple
 
-from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QBrush,
     QColor,
@@ -16,8 +16,10 @@ from PySide6.QtGui import (
     QPen,
     QUndoCommand,
     QUndoStack,
+    QWheelEvent,
 )
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QApplication,
     QCheckBox,
     QComboBox,
@@ -88,10 +90,25 @@ NODE_DRAG_MIME_TYPE = "application/x-audioflow-node"
 
 
 class _NoWheelComboBox(QComboBox):
-    """Combo box that passes wheel scrolling through to zoom the canvas."""
+    """Combo box that never changes selection on wheel hover, while keeping popup list scrolling isolated."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setMaxVisibleItems(12)
+        self.view().setMaximumHeight(240)
+        self.view().setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        container = self.view().parentWidget()
+        if container is not None:
+            container.installEventFilter(self)
 
     def wheelEvent(self, event) -> None:  # noqa: N802
-        event.ignore()
+        event.accept()
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802
+        if event.type() == QEvent.Type.Wheel and obj is self.view().parentWidget() and self.view().isVisible():
+            event.accept()
+            return True
+        return super().eventFilter(obj, event)
 
 
 class _NoWheelSlider(QSlider):
@@ -1350,7 +1367,55 @@ class NodeCanvas(QGraphicsView):
         self._update_zoom_label()
         self._emit_viewport_changed()
 
+    def _find_open_combo_view(self) -> Optional[QAbstractItemView]:
+        for item in self.node_items.values():
+            for cmb in (item.cmb_device, item.cmb_process, item.cmb_map_l, item.cmb_map_r):
+                if cmb is not None and cmb.view() is not None and cmb.view().isVisible():
+                    return cmb.view()
+        return None
+
+    def _is_wheel_over_dropdown(self, view_pos: QPoint) -> bool:
+        if QApplication.activePopupWidget() is not None:
+            return True
+        item = self.itemAt(view_pos)
+        if isinstance(item, QGraphicsProxyWidget) and item.widget() is not None:
+            scene_pt = self.mapToScene(view_pos)
+            local_pt = item.mapFromScene(scene_pt).toPoint()
+            w = item.widget().childAt(local_pt)
+            while w is not None:
+                if isinstance(w, (QComboBox, QAbstractItemView)):
+                    return True
+                if w is item.widget():
+                    break
+                w = w.parentWidget()
+        return False
+
     def wheelEvent(self, event) -> None:
+        open_view = self._find_open_combo_view()
+        if open_view is not None:
+            popup_win = open_view.window()
+            global_pt = event.globalPosition().toPoint()
+            if popup_win is not None and popup_win.geometry().contains(global_pt):
+                vp = open_view.viewport()
+                local_pos = QPointF(vp.mapFromGlobal(global_pt))
+                mapped = QWheelEvent(
+                    local_pos,
+                    event.globalPosition(),
+                    event.pixelDelta(),
+                    event.angleDelta(),
+                    event.buttons(),
+                    event.modifiers(),
+                    event.phase(),
+                    event.inverted(),
+                )
+                QApplication.sendEvent(vp, mapped)
+            event.accept()
+            return
+
+        if self._is_wheel_over_dropdown(event.position().toPoint()):
+            event.accept()
+            return
+
         factor = 1.15 if event.angleDelta().y() > 0 else 1.0 / 1.15
         self._apply_zoom_factor(factor)
         event.accept()
