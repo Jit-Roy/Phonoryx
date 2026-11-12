@@ -485,7 +485,9 @@ class NodeCanvas(QGraphicsView):
 
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
         self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.FullViewportUpdate)
-        self.setDragMode(QGraphicsView.DragMode.RubberBandDrag)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setDragMode(QGraphicsView.DragMode.NoDrag)
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setAcceptDrops(True)
 
@@ -837,11 +839,7 @@ class NodeCanvas(QGraphicsView):
 
     def mousePressEvent(self, event) -> None:
         pos = event.position().toPoint()
-        if event.button() == Qt.MouseButton.MiddleButton or (
-            event.button() == Qt.MouseButton.LeftButton
-            and (event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
-            and self.itemAt(pos) is None
-        ):
+        if event.button() == Qt.MouseButton.MiddleButton:
             self._panning = True
             self._pan_start = pos
             self.setCursor(Qt.CursorShape.ClosedHandCursor)
@@ -873,6 +871,19 @@ class NodeCanvas(QGraphicsView):
                 self.scene_obj.addItem(self._temp_wire)
                 event.accept()
                 return
+
+            if self.itemAt(pos) is None:
+                if event.modifiers() & (
+                    Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier
+                ):
+                    self.setDragMode(QGraphicsView.DragMode.RubberBandDrag)
+                else:
+                    self.scene_obj.clearSelection()
+                    self._panning = True
+                    self._pan_start = pos
+                    self.setCursor(Qt.CursorShape.ClosedHandCursor)
+                    event.accept()
+                    return
 
             # Record node positions for move undo tracking
             self._move_snapshot = {
@@ -965,6 +976,8 @@ class NodeCanvas(QGraphicsView):
             return
 
         super().mouseReleaseEvent(event)
+        if self.dragMode() != QGraphicsView.DragMode.NoDrag:
+            self.setDragMode(QGraphicsView.DragMode.NoDrag)
 
         if self._move_snapshot:
             moves = []

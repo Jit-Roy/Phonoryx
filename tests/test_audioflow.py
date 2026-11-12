@@ -459,4 +459,45 @@ def test_virtual_driver_option2_inspector_and_device_prioritization(qapp):
     assert "VirtualDrivers/Virtual-Audio-Driver" in panel.lbl_missing_warn.text()
 
 
+def test_comfyui_left_drag_pan_and_hidden_scrollbars(qapp, tmp_path: Path):
+    win = AudioFlowMainWindow(
+        auto_start=False,
+        cache_path=tmp_path / "pan_cache.json",
+        restore_cache=False,
+    )
+    win.show()
+    qapp.processEvents()
+    try:
+        canvas = win.canvas
+        assert canvas.horizontalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        assert canvas.verticalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        assert not canvas.horizontalScrollBar().isVisible()
+        assert not canvas.verticalScrollBar().isVisible()
+
+        node = canvas.add_node_action(NodeType.VOLUME, scene_pos=QPointF(100, 100))
+        canvas.node_items[node.id].setSelected(True)
+        canvas.centerOn(0, 0)
+        qapp.processEvents()
+
+        before = canvas.mapToScene(canvas.viewport().rect().center())
+        vp = canvas.viewport()
+        start_pt = QPoint(40, 40)
+        end_pt = QPoint(180, 130)
+        QTest.mousePress(vp, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, start_pt)
+        QTest.mouseMove(vp, end_pt)
+        QTest.mouseRelease(vp, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, end_pt)
+        qapp.processEvents()
+
+        after = canvas.mapToScene(canvas.viewport().rect().center())
+        # Dragging right & down shifts viewport scene center left & up
+        assert after.x() < before.x() - 80
+        assert after.y() < before.y() - 50
+        # Clicking empty canvas also clears node selection without moving the node
+        assert not canvas.node_items[node.id].isSelected()
+        assert node.x == pytest.approx(100.0)
+        assert node.y == pytest.approx(100.0)
+    finally:
+        win.close()
+
+
 
