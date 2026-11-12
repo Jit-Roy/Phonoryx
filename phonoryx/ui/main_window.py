@@ -1526,10 +1526,11 @@ class PhonoryxMainWindow(QMainWindow):
             return super().eventFilter(obj, event)
         etype = event.type()
         if etype == QEvent.Type.MouseButtonPress and hasattr(self, "canvas"):
-            gpos = event.globalPosition().toPoint() if hasattr(event, "globalPosition") else None
-            self.canvas.hide_open_popups(gpos)
+            if obj is not self.canvas and obj is not self.canvas.viewport():
+                self.canvas.hide_open_popups()
             ed = self._tab_rename_editor
             if ed is not None and isValid(ed):
+                gpos = event.globalPosition().toPoint() if hasattr(event, "globalPosition") else None
                 if gpos is None or not ed.rect().contains(ed.mapFromGlobal(gpos)):
                     if ed.commit_fn is not None:
                         ed.commit_fn()

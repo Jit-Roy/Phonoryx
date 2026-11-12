@@ -113,6 +113,7 @@ class _NoWheelComboBox(QComboBox):
         super().__init__(parent)
         self.node_item: Optional["NodeItem"] = node_item
         self._old_z: Optional[float] = None
+        self._popup_item: Optional[QGraphicsItem] = None
         self.setMaxVisibleItems(7)
         self.view().setMaximumHeight(165)
         self.view().setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
@@ -149,6 +150,7 @@ class _NoWheelComboBox(QComboBox):
             try:
                 for child in node._proxy.childItems():
                     child.setZValue(1002.0)
+                    self._popup_item = child
             except Exception:
                 pass
 
@@ -157,6 +159,7 @@ class _NoWheelComboBox(QComboBox):
             super().hidePopup()
         except Exception:
             pass
+        self._popup_item = None
         try:
             node = self._resolve_node_item()
             if node is not None and self._old_z is not None:
@@ -169,12 +172,20 @@ class _NoWheelComboBox(QComboBox):
 
     def wheelEvent(self, event) -> None:  # noqa: N802
         if self.view() is not None and self.view().isVisible():
-            QApplication.sendEvent(self.view().viewport(), event)
+            sb = self.view().verticalScrollBar()
+            if sb is not None and sb.isVisible():
+                dy = event.angleDelta().y()
+                steps = -int((dy / 120.0) * 3) if dy != 0 else 0
+                sb.setValue(sb.value() + steps)
         event.accept()
 
     def eventFilter(self, obj, event) -> bool:  # noqa: N802
         if event.type() == QEvent.Type.Wheel and obj is self.view().parentWidget() and self.view().isVisible():
-            QApplication.sendEvent(self.view().viewport(), event)
+            sb = self.view().verticalScrollBar()
+            if sb is not None and sb.isVisible():
+                dy = event.angleDelta().y()
+                steps = -int((dy / 120.0) * 3) if dy != 0 else 0
+                sb.setValue(sb.value() + steps)
             event.accept()
             return True
         return super().eventFilter(obj, event)
@@ -185,6 +196,87 @@ class _NoWheelSlider(QSlider):
 
     def wheelEvent(self, event) -> None:  # noqa: N802
         event.ignore()
+
+
+def _find_popup_graphics_item(open_cmb: Optional[QComboBox]) -> Optional[QGraphicsItem]:
+    if open_cmb is None:
+        return None
+    it = getattr(open_cmb, "_popup_item", None)
+    if it is not None:
+        try:
+            _ = it.scene()
+            return it
+        except Exception:
+            pass
+    node = getattr(open_cmb, "node_item", None)
+    if node is not None and hasattr(node, "_proxy") and node._proxy is not None:
+        try:
+            for child in node._proxy.childItems():
+                return child
+        except Exception:
+            pass
+    return None
+
+
+def _is_scene_pos_on_popup(open_cmb: Optional[QComboBox], scene_pt: QPointF) -> bool:
+    if open_cmb is None:
+        return False
+    pw = _find_popup_graphics_item(open_cmb)
+    if pw is not None:
+        try:
+            return pw.sceneBoundingRect().contains(scene_pt)
+        except Exception:
+            pass
+    return False
+
+
+def _is_view_pos_on_popup(canvas: QGraphicsView, open_cmb: Optional[QComboBox], view_pos: Optional[QPoint]) -> bool:
+    if canvas is None or open_cmb is None or view_pos is None:
+        return False
+    view = open_cmb.view()
+    if view is None or not view.isVisible():
+        return False
+    scene_pt = canvas.mapToScene(view_pos)
+    return _is_scene_pos_on_popup(open_cmb, scene_pt)
+
+
+def _handle_popup_click(canvas: QGraphicsView, open_cmb: Optional[QComboBox], view_pos: Optional[QPoint]) -> bool:
+    """Handle mouse clicks on an open combo dropdown list or its scrollbar in scene coordinates."""
+    if canvas is None or open_cmb is None or view_pos is None:
+        return False
+    v = open_cmb.view()
+    if v is None or not v.isVisible():
+        return False
+    pw = _find_popup_graphics_item(open_cmb)
+    if pw is None:
+        return False
+    scene_pt = canvas.mapToScene(view_pos)
+    if not pw.sceneBoundingRect().contains(scene_pt):
+        return False
+
+    pt_in_pw = pw.mapFromScene(scene_pt).toPoint()
+    container_widget = v.parentWidget()
+
+    # Click on vertical scrollbar:
+    sb = v.verticalScrollBar()
+    if sb is not None and sb.isVisible():
+        sb_pt = sb.mapFrom(container_widget, pt_in_pw)
+        if sb.rect().contains(sb_pt):
+            if sb.height() > 0:
+                ratio = max(0.0, min(1.0, float(sb_pt.y()) / float(sb.height())))
+                val = int(ratio * (sb.maximum() - sb.minimum()) + sb.minimum())
+                sb.setValue(val)
+            return True
+
+    # Click on item row in viewport:
+    vp = v.viewport()
+    pt_in_vp = vp.mapFrom(container_widget, pt_in_pw) if vp is not None else pt_in_pw
+    idx = v.indexAt(pt_in_vp)
+    if idx.isValid():
+        open_cmb.setCurrentIndex(idx.row())
+        open_cmb.activated.emit(idx.row())
+    open_cmb.hidePopup()
+    return True
 
 
 def _is_point_inside_widget(widget: Optional[QWidget], global_pos: Optional[QPoint]) -> bool:
@@ -205,48 +297,43 @@ def _is_view_pos_on_combo(canvas: QGraphicsView, open_cmb: Optional[QComboBox], 
         return False
     try:
         scene_pt = canvas.mapToScene(view_pos)
-        for item in canvas.items(view_pos):
-            if isinstance(item, QGraphicsProxyWidget) and item.widget() is not None:
-                local_pt = item.mapFromScene(scene_pt).toPoint()
-                w = item.widget().childAt(local_pt)
-                while w is not None:
-                    if w is open_cmb:
-                        return True
-                    if w is item.widget():
-                        break
-                    w = w.parentWidget()
+        pw = open_cmb.graphicsProxyWidget()
+        if pw is None:
+            node = getattr(open_cmb, "node_item", None)
+            if node is not None and hasattr(node, "_proxy") and node._proxy is not None:
+                pw = node._proxy
+        if pw is not None:
+            local_pt = pw.mapFromScene(scene_pt).toPoint()
+            w = pw.widget().childAt(local_pt)
+            while w is not None:
+                if w is open_cmb:
+                    return True
+                if w is pw.widget():
+                    break
+                w = w.parentWidget()
     except Exception:
         pass
     return False
 
 
 def _is_global_pos_on_combo(canvas: QGraphicsView, open_cmb: Optional[QComboBox], global_pos: Optional[QPoint]) -> bool:
-    if open_cmb is None or global_pos is None:
+    if canvas is None or open_cmb is None or global_pos is None:
         return False
-    try:
-        if open_cmb.isVisible() and open_cmb.rect().contains(open_cmb.mapFromGlobal(global_pos)):
-            return True
-    except Exception:
-        pass
     try:
         vp_pos = canvas.viewport().mapFromGlobal(global_pos)
         return _is_view_pos_on_combo(canvas, open_cmb, vp_pos)
     except Exception:
-        pass
-    return False
+        return False
 
 
-def _is_global_pos_on_popup(open_view: Optional[QAbstractItemView], global_pos: Optional[QPoint]) -> bool:
-    if open_view is None or global_pos is None:
+def _is_global_pos_on_popup(canvas: QGraphicsView, open_cmb: Optional[QComboBox], global_pos: Optional[QPoint]) -> bool:
+    if canvas is None or open_cmb is None or global_pos is None:
         return False
     try:
-        for target in (open_view, open_view.viewport()):
-            if target is not None and target.isVisible():
-                if target.rect().contains(target.mapFromGlobal(global_pos)):
-                    return True
+        vp_pos = canvas.viewport().mapFromGlobal(global_pos)
+        return _is_view_pos_on_popup(canvas, open_cmb, vp_pos)
     except Exception:
-        pass
-    return False
+        return False
 
 
 class PortItem(QGraphicsObject):
@@ -1820,7 +1907,7 @@ class NodeCanvas(QGraphicsView):
             open_cmb.hidePopup()
             return True
 
-        if _is_global_pos_on_combo(self, open_cmb, global_pos) or _is_global_pos_on_popup(open_view, global_pos):
+        if _is_global_pos_on_combo(self, open_cmb, global_pos) or _is_global_pos_on_popup(self, open_cmb, global_pos):
             return False
 
         open_cmb.hidePopup()
@@ -1844,25 +1931,12 @@ class NodeCanvas(QGraphicsView):
         open_cmb, open_view = self._find_open_combo()
         if open_cmb is not None and open_view is not None:
             view_pt = event.position().toPoint()
-            global_pt = event.globalPosition().toPoint()
-            if (
-                _is_view_pos_on_combo(self, open_cmb, view_pt)
-                or _is_global_pos_on_combo(self, open_cmb, global_pt)
-                or _is_global_pos_on_popup(open_view, global_pt)
-            ):
-                vp = open_view.viewport()
-                local_pos = QPointF(vp.mapFromGlobal(global_pt))
-                mapped = QWheelEvent(
-                    local_pos,
-                    event.globalPosition(),
-                    event.pixelDelta(),
-                    event.angleDelta(),
-                    event.buttons(),
-                    event.modifiers(),
-                    event.phase(),
-                    event.inverted(),
-                )
-                QApplication.sendEvent(vp, mapped)
+            if _is_view_pos_on_popup(self, open_cmb, view_pt) or _is_view_pos_on_combo(self, open_cmb, view_pt):
+                sb = open_view.verticalScrollBar()
+                if sb is not None and sb.isVisible():
+                    dy = event.angleDelta().y()
+                    steps = -int((dy / 120.0) * 3) if dy != 0 else 0
+                    sb.setValue(sb.value() + steps)
                 event.accept()
                 return
 
@@ -1952,38 +2026,22 @@ class NodeCanvas(QGraphicsView):
 
     def mousePressEvent(self, event) -> None:
         view_pos = event.position().toPoint()
-        global_pos = event.globalPosition().toPoint()
         open_cmb, open_view = self._find_open_combo()
         if open_cmb is not None:
-            in_cmb = (
-                _is_view_pos_on_combo(self, open_cmb, view_pos)
-                or _is_global_pos_on_combo(self, open_cmb, global_pos)
-            )
-            in_popup = _is_global_pos_on_popup(open_view, global_pos)
-
-            if in_cmb:
+            if _is_view_pos_on_combo(self, open_cmb, view_pos):
                 # User clicked on the open combobox/arrow to toggle it closed
                 open_cmb.hidePopup()
                 event.accept()
                 return
 
-            if in_popup and open_view is not None:
-                # Forward mouse press to popup list viewport so item is clicked/selected cleanly
-                vp = open_view.viewport()
-                local_pos = QPointF(vp.mapFromGlobal(global_pos))
-                mapped = QMouseEvent(
-                    event.type(),
-                    local_pos,
-                    event.globalPosition(),
-                    event.button(),
-                    event.buttons(),
-                    event.modifiers(),
-                )
-                QApplication.sendEvent(vp, mapped)
+            if _handle_popup_click(self, open_cmb, view_pos):
                 event.accept()
                 return
 
+            # Clicked outside the combobox and outside the popup: dismiss popup and absorb click
             open_cmb.hidePopup()
+            event.accept()
+            return
 
         pos = event.position().toPoint()
         if not isinstance(self.itemAt(pos), QGraphicsProxyWidget):
@@ -2141,27 +2199,7 @@ class NodeCanvas(QGraphicsView):
         open_cmb, open_view = self._find_open_combo()
         if open_cmb is not None and open_view is not None:
             view_pos = event.position().toPoint()
-            global_pos = event.globalPosition().toPoint()
-            in_cmb = (
-                _is_view_pos_on_combo(self, open_cmb, view_pos)
-                or _is_global_pos_on_combo(self, open_cmb, global_pos)
-            )
-            in_popup = _is_global_pos_on_popup(open_view, global_pos)
-            if in_popup:
-                vp = open_view.viewport()
-                local_pos = QPointF(vp.mapFromGlobal(global_pos))
-                mapped = QMouseEvent(
-                    event.type(),
-                    local_pos,
-                    event.globalPosition(),
-                    event.button(),
-                    event.buttons(),
-                    event.modifiers(),
-                )
-                QApplication.sendEvent(vp, mapped)
-                event.accept()
-                return
-            if in_cmb:
+            if _is_view_pos_on_popup(self, open_cmb, view_pos) or _is_view_pos_on_combo(self, open_cmb, view_pos):
                 event.accept()
                 return
 

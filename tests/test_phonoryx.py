@@ -1836,6 +1836,110 @@ def test_dropdown_max_height_and_zorder_above_below_node(qapp, tmp_path: Path):
         win.close()
 
 
+def test_dropdown_selection_accurate_under_zoom_and_no_mute_fallthrough(qapp, tmp_path: Path):
+    """Dropdown list clicks select exact target item under zoom/pan without hitting close items or mute checkbox."""
+    win = PhonoryxMainWindow(
+        auto_start=False,
+        cache_path=tmp_path / "zoom_dropdown_cache.json",
+        restore_cache=False,
+    )
+    win.show()
+    qapp.processEvents()
+    try:
+        canvas = win.canvas
+        node = canvas.add_node_action(NodeType.APP_CAPTURE, scene_pos=QPointF(100, 100))
+        item = canvas.node_items[node.id]
+        cmb = item.cmb_process
+        chk_mute = item.chk_mute
+        assert cmb is not None and chk_mute is not None
+        assert not chk_mute.isChecked()
+
+        # Populate with 20 items
+        cmb.clear()
+        for idx in range(20):
+            cmb.addItem(f"Process {idx}.exe (PID {5000 + idx})", (5000 + idx, f"Process {idx}.exe"))
+
+        # Zoom in and pan
+        canvas.scale(1.4, 1.4)
+        canvas.centerOn(node.x + 100, node.y + 100)
+        qapp.processEvents()
+
+        # 1. Open popup
+        cmb.showPopup()
+        qapp.processEvents()
+        v = cmb.view()
+        assert v.isVisible()
+
+        # Target Item 4:
+        rect4 = v.visualRect(v.model().index(4, 0))
+        from phonoryx.ui.canvas import _find_popup_graphics_item
+        pw = _find_popup_graphics_item(cmb)
+        assert pw is not None
+        scene_pt4 = pw.scenePos() + QPointF(v.x() + rect4.center().x(), v.y() + rect4.center().y())
+        vp_pt4 = canvas.mapFromScene(scene_pt4)
+        global_pt4 = canvas.viewport().mapToGlobal(vp_pt4)
+
+        ev_press = QMouseEvent(
+            QEvent.Type.MouseButtonPress,
+            QPointF(vp_pt4),
+            QPointF(global_pt4),
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        canvas.mousePressEvent(ev_press)
+        qapp.processEvents()
+
+        # Exact item 4 must be selected, NOT item 2, 3, 5, or 6!
+        assert cmb.currentIndex() == 4
+        assert not chk_mute.isChecked(), "Must not toggle mute"
+        assert not v.isVisible(), "Popup must close after item selection"
+
+        # 2. Wheel scrolling over open popup scrolls the list and does NOT close it or zoom canvas
+        cmb.showPopup()
+        qapp.processEvents()
+        assert v.isVisible()
+        initial_zoom = float(canvas.transform().m11())
+        initial_sb = v.verticalScrollBar().value()
+
+        # Scroll down over popup
+        sb_pt = canvas.viewport().mapFromGlobal(v.viewport().mapToGlobal(v.viewport().rect().center()))
+        ev_wheel = QWheelEvent(
+            QPointF(sb_pt),
+            QPointF(canvas.viewport().mapToGlobal(sb_pt)),
+            QPoint(0, 0),
+            QPoint(0, -120),
+            Qt.MouseButton.NoButton,
+            Qt.KeyboardModifier.NoModifier,
+            Qt.ScrollPhase.NoScrollPhase,
+            False,
+        )
+        canvas.wheelEvent(ev_wheel)
+        qapp.processEvents()
+
+        assert v.isVisible(), "Wheel over popup must keep popup open"
+        assert v.verticalScrollBar().value() > initial_sb, "Wheel must scroll the popup list"
+        assert float(canvas.transform().m11()) == initial_zoom, "Wheel over popup must not zoom canvas"
+
+        # 3. Click outside popup: dismisses popup and absorbs click without toggling mute
+        outside_pt = canvas.mapFromScene(QPointF(node.x + 20, node.y + 200))
+        ev_outside = QMouseEvent(
+            QEvent.Type.MouseButtonPress,
+            QPointF(outside_pt),
+            QPointF(canvas.viewport().mapToGlobal(outside_pt)),
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        canvas.mousePressEvent(ev_outside)
+        qapp.processEvents()
+
+        assert not v.isVisible(), "Clicking outside must close popup"
+        assert not chk_mute.isChecked(), "Clicking outside must not toggle mute"
+    finally:
+        win.close()
+
+
 
 
 
