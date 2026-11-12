@@ -47,7 +47,7 @@ pip install -r requirements.txt
 Launch Phonoryx directly from source (no CMake build step needed):
 
 ```powershell
-python run.py
+python main.py
 ```
 
 Or run the package module directly:
@@ -55,8 +55,6 @@ Or run the package module directly:
 ```powershell
 python -m phonoryx
 ```
-
-You can also double-click `launch_phonoryx.vbs` (windowless launcher) or `launch_phonoryx.bat` on Windows.
 
 ## Building the Executable (PyInstaller)
 

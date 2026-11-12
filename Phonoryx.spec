@@ -45,7 +45,7 @@ hiddenimports = [
 icon_path = os.path.join(base_dir, "assets", "icons", "app_icon.ico")
 
 a = Analysis(
-    ["run.py"],
+    ["main.py"],
     pathex=[base_dir],
     binaries=binaries,
     datas=datas,

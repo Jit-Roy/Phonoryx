@@ -1766,6 +1766,77 @@ def test_dropdown_popup_selection_no_fallthrough_to_mute_and_icon_assets(qapp, t
         win.close()
 
 
+def test_dropdown_max_height_and_zorder_above_below_node(qapp, tmp_path: Path):
+    """Dropdown list has compact maxVisibleItems/maxHeight and is drawn above any node below it."""
+    win = PhonoryxMainWindow(
+        auto_start=False,
+        cache_path=tmp_path / "zorder_cache.json",
+        restore_cache=False,
+    )
+    win.show()
+    qapp.processEvents()
+    try:
+        canvas = win.canvas
+        # Create Node 1 at (100, 100) and Node 2 directly below at (100, 180)
+        n1 = canvas.add_node_action(NodeType.APP_CAPTURE, scene_pos=QPointF(100, 100))
+        n2 = canvas.add_node_action(NodeType.MIC_INPUT, scene_pos=QPointF(100, 180))
+        qapp.processEvents()
+
+        it1 = canvas.node_items[n1.id]
+        it2 = canvas.node_items[n2.id]
+        cmb = it1.cmb_process
+        assert cmb is not None
+
+        # 1. Height is bounded, scrollable, not infinite height
+        assert cmb.maxVisibleItems() <= 8
+        assert cmb.view().maximumHeight() <= 180
+
+        # Populate with many processes so it scrolls
+        for p_idx in range(30):
+            cmb.addItem(f"daemon_{p_idx}.exe (PID {3000 + p_idx})", (3000 + p_idx, f"daemon_{p_idx}.exe"))
+
+        canvas.centerOn(100 + NODE_WIDTH / 2.0, 150)
+        qapp.processEvents()
+
+        initial_z1 = it1.zValue()
+        assert initial_z1 == 2.0
+
+        # 2. Open dropdown: Node 1 elevates to Z=1000 so dropdown is on top of Node 2
+        cmb.showPopup()
+        qapp.processEvents()
+        assert cmb.view().isVisible()
+        assert it1.zValue() >= 1000.0
+
+        # At the scene coordinate where the dropdown hangs over Node 2's header:
+        overlap_pt = canvas.mapFromScene(QPointF(150, 195))
+        items_at_pt = canvas.items(overlap_pt)
+        assert len(items_at_pt) > 0
+        assert items_at_pt[0].topLevelItem() is it1, "Dropdown must be drawn on top of the node below it"
+
+        # 3. Close popup: restores normal Z-value
+        cmb.hidePopup()
+        qapp.processEvents()
+        assert not cmb.view().isVisible()
+        assert it1.zValue() == initial_z1
+
+        # 4. Clicking Node 1 header brings it forward
+        node1_header_pt = canvas.mapFromScene(QPointF(150, 115))
+        ev_click = QMouseEvent(
+            QEvent.Type.MouseButtonPress,
+            QPointF(node1_header_pt),
+            QPointF(canvas.viewport().mapToGlobal(node1_header_pt)),
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        canvas.mousePressEvent(ev_click)
+        qapp.processEvents()
+        assert it1.zValue() > it2.zValue()
+    finally:
+        win.close()
+
+
+
 
 
 

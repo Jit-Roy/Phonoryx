@@ -104,16 +104,68 @@ _RESIZE_CURSORS = {
 
 
 class _NoWheelComboBox(QComboBox):
-    """Combo box that never changes selection on wheel hover, while keeping popup list scrolling isolated."""
+    """Combo box that never changes selection on wheel hover, isolates popup scrolling,
+    enforces a maximum compact height, and elevates the node to the highest Z-order while open
+    so dropdown elements and arrows are never clipped or hidden by nodes below it.
+    """
 
-    def __init__(self, parent=None) -> None:
+    def __init__(self, parent=None, node_item: Optional["NodeItem"] = None) -> None:
         super().__init__(parent)
-        self.setMaxVisibleItems(12)
-        self.view().setMaximumHeight(240)
+        self.node_item: Optional["NodeItem"] = node_item
+        self._old_z: Optional[float] = None
+        self.setMaxVisibleItems(7)
+        self.view().setMaximumHeight(165)
         self.view().setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         container = self.view().parentWidget()
         if container is not None:
             container.installEventFilter(self)
+
+    def _resolve_node_item(self) -> Optional["NodeItem"]:
+        if self.node_item is not None:
+            return self.node_item
+        try:
+            win = self.window()
+            if win is not None and win.graphicsProxyWidget() is not None:
+                parent_it = win.graphicsProxyWidget().parentItem()
+                if isinstance(parent_it, NodeItem):
+                    self.node_item = parent_it
+                    return parent_it
+        except Exception:
+            pass
+        return None
+
+    def showPopup(self) -> None:  # noqa: N802
+        node = self._resolve_node_item()
+        if node is not None:
+            try:
+                self._old_z = float(node.zValue())
+                node.setZValue(1000.0)
+                if hasattr(node, "_proxy") and node._proxy is not None:
+                    node._proxy.setZValue(1001.0)
+            except Exception:
+                pass
+        super().showPopup()
+        if node is not None and hasattr(node, "_proxy") and node._proxy is not None:
+            try:
+                for child in node._proxy.childItems():
+                    child.setZValue(1002.0)
+            except Exception:
+                pass
+
+    def hidePopup(self) -> None:  # noqa: N802
+        try:
+            super().hidePopup()
+        except Exception:
+            pass
+        try:
+            node = self._resolve_node_item()
+            if node is not None and self._old_z is not None:
+                node.setZValue(self._old_z)
+                if hasattr(node, "_proxy") and node._proxy is not None:
+                    node._proxy.setZValue(3.0)
+                self._old_z = None
+        except Exception:
+            pass
 
     def wheelEvent(self, event) -> None:  # noqa: N802
         if self.view() is not None and self.view().isVisible():
@@ -403,7 +455,7 @@ class NodeItem(QGraphicsObject):
             row.setSpacing(6)
             lbl = QLabel("Device")
             lbl.setFixedWidth(46)
-            self.cmb_device = _NoWheelComboBox(root)
+            self.cmb_device = _NoWheelComboBox(root, node_item=self)
             self.cmb_device.currentIndexChanged.connect(self._on_device_changed)
             row.addWidget(lbl)
             row.addWidget(self.cmb_device, 1)
@@ -422,7 +474,7 @@ class NodeItem(QGraphicsObject):
             row.setSpacing(6)
             lbl = QLabel("App")
             lbl.setFixedWidth(30)
-            self.cmb_process = _NoWheelComboBox(root)
+            self.cmb_process = _NoWheelComboBox(root, node_item=self)
             self.cmb_process.currentIndexChanged.connect(self._on_process_changed)
             row.addWidget(lbl)
             row.addWidget(self.cmb_process, 1)
@@ -486,7 +538,7 @@ class NodeItem(QGraphicsObject):
                 row.setSpacing(6)
                 lbl = QLabel(title)
                 lbl.setFixedWidth(48)
-                cmb = _NoWheelComboBox(root)
+                cmb = _NoWheelComboBox(root, node_item=self)
                 cmb.addItem("0 (Left)", 0)
                 cmb.addItem("1 (Right)", 1)
                 cmb.currentIndexChanged.connect(self._on_channel_map_changed)
@@ -822,6 +874,9 @@ class NodeItem(QGraphicsObject):
                 self.setSelected(not self.isSelected())
                 event.accept()
                 return
+        if self.canvas is not None and hasattr(self.canvas, "_top_node_z"):
+            self.canvas._top_node_z += 0.001
+            self.setZValue(self.canvas._top_node_z)
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event) -> None:
@@ -1302,6 +1357,7 @@ class NodeCanvas(QGraphicsView):
         self._move_snapshot: Dict[int, Tuple[float, float]] = {}
         self._dash_phase = 0.0
         self._last_meters: Dict[int, NodeMeter] = {}
+        self._top_node_z = 2.0
 
         self.scene_obj.selectionChanged.connect(self._on_scene_selection_changed)
         self.graph_changed.connect(self.workspace_modified.emit)

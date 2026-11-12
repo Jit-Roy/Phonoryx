@@ -459,6 +459,7 @@ QComboBox QAbstractItemView {{
     border: 1px solid {COMFY_BORDER};
     selection-background-color: {COMFY_SURFACE_HOVER};
     selection-color: {COMFY_TEXT_PRIMARY};
+    max-height: 165px;
 }}
 
 QPushButton {{
@@ -549,6 +550,14 @@ QWidget#NodeInlineWidgetRoot QLabel {{
 }}
 QWidget#NodeInlineWidgetRoot QComboBox {{
     combobox-popup: 0;
+}}
+QWidget#NodeInlineWidgetRoot QComboBox QAbstractItemView {{
+    background-color: {COMFY_MENU_BG};
+    color: {COMFY_TEXT_INPUT};
+    border: 1px solid {COMFY_BORDER};
+    selection-background-color: {COMFY_SURFACE_HOVER};
+    selection-color: {COMFY_TEXT_PRIMARY};
+    max-height: 165px;
 }}
 QWidget#NodeInlineWidgetRoot QComboBox,
 QWidget#NodeInlineWidgetRoot QLineEdit {{
