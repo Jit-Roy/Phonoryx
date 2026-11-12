@@ -494,25 +494,37 @@ class InspectorPanel(QWidget):
             NodeType.VIRTUAL_INPUT,
             NodeType.VIRTUAL_OUTPUT,
         )
+        is_physical_only = node.node_type in (
+            NodeType.MIC_INPUT,
+            NodeType.LINE_INPUT,
+            NodeType.SPEAKER_OUTPUT,
+        )
         candidates = [
             d
             for d in self._devices
             if (d.flow == DataFlow.CAPTURE if want_capture else d.flow == DataFlow.RENDER)
+            and (not is_virtual_node or d.is_virtual)
+            and (not is_physical_only or not d.is_virtual)
         ]
-        if is_virtual_node:
-            candidates.sort(key=lambda d: (not d.is_virtual, d.name.lower()))
+        candidates.sort(key=lambda d: d.name.lower())
 
         seen_ids = {""}
+        dev_by_id = {d.id: d for d in self._devices}
         for d in candidates:
             label = f"[Virtual] {d.name}" if d.is_virtual else d.name
             self.cmb_device.addItem(label, (d.id, d.name))
             seen_ids.add(d.id)
 
         if node.device_id and node.device_id not in seen_ids:
-            self.cmb_device.addItem(
-                f"[OFFLINE] {node.device_name or node.device_id}",
-                (node.device_id, node.device_name),
-            )
+            existing = dev_by_id.get(node.device_id)
+            if existing is not None:
+                lbl = f"[Virtual] {existing.name}" if existing.is_virtual else existing.name
+                self.cmb_device.addItem(lbl, (existing.id, existing.name))
+            else:
+                self.cmb_device.addItem(
+                    f"[OFFLINE] {node.device_name or node.device_id}",
+                    (node.device_id, node.device_name),
+                )
 
         idx = 0
         for i in range(self.cmb_device.count()):

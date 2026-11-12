@@ -466,25 +466,34 @@ def test_virtual_driver_option2_inspector_and_device_prioritization(qapp):
         is_virtual=True,
     )
 
-    # 1. With virtual endpoints installed: Option 1 fake URIs must be gone & virtual sorted first
+    # 1. Virtual Device Output / Input show only virtual endpoints; Physical Device Output / Mic show only physical
     panel.update_catalog([hw_spk, hw_mic, vad_spk, vad_mic], [])
     vmic_out = NodeModel(id=1, node_type=NodeType.VIRTUAL_OUTPUT)
     panel.set_node(vmic_out)
     combo_ids = [panel.cmb_device.itemData(i)[0] for i in range(panel.cmb_device.count())]
     assert not any(cid.startswith("audioflow://") for cid in combo_ids)
-    assert "hw-mic" not in combo_ids and "vad-mic" not in combo_ids
-    assert combo_ids[1] == "vad-spk"
+    assert combo_ids == ["", "vad-spk"]
     assert panel.lbl_missing_warn.isHidden()
+
+    phys_out = NodeModel(id=3, node_type=NodeType.SPEAKER_OUTPUT)
+    panel.set_node(phys_out)
+    phys_ids = [panel.cmb_device.itemData(i)[0] for i in range(panel.cmb_device.count())]
+    assert phys_ids == ["", "hw-spk"]
 
     vin = NodeModel(id=2, node_type=NodeType.VIRTUAL_INPUT)
     panel.set_node(vin)
     in_ids = [panel.cmb_device.itemData(i)[0] for i in range(panel.cmb_device.count())]
-    assert in_ids[1] == "vad-mic"
-    assert "vad-spk" not in in_ids
+    assert in_ids == ["", "vad-mic"]
+
+    mic_in = NodeModel(id=4, node_type=NodeType.MIC_INPUT)
+    panel.set_node(mic_in)
+    mic_ids = [panel.cmb_device.itemData(i)[0] for i in range(panel.cmb_device.count())]
+    assert mic_ids == ["", "hw-mic"]
 
     # 2. Without any Windows virtual driver installed: show setup hint for VirtualDrivers/Virtual-Audio-Driver
     panel.update_catalog([hw_spk, hw_mic], [])
     panel.set_node(vmic_out)
+    assert [panel.cmb_device.itemData(i)[0] for i in range(panel.cmb_device.count())] == [""]
     assert not panel.lbl_missing_warn.isHidden()
     assert "VirtualDrivers/Virtual-Audio-Driver" in panel.lbl_missing_warn.text()
 

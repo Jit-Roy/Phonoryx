@@ -146,19 +146,19 @@ NODE_SPECS: Dict[NodeType, NodeSpec] = {
     # Audio Output Nodes
     NodeType.SPEAKER_OUTPUT: NodeSpec(
         NodeType.SPEAKER_OUTPUT,
-        "Audio Device Output",
+        "Physical Device Output",
         NodeCategory.OUTPUT,
         ("In",),
         (),
-        "Outputs audio to any physical playback device (speakers, headphones, monitors, USB DAC).",
+        "Sends audio to hardware speakers, headphones, monitors, or USB DACs.",
     ),
     NodeType.VIRTUAL_OUTPUT: NodeSpec(
         NodeType.VIRTUAL_OUTPUT,
-        "Virtual Cable / Mic Output",
+        "Virtual Device Output",
         NodeCategory.OUTPUT,
         ("In",),
         (),
-        "Routes audio to a Windows virtual playback endpoint paired with a virtual mic for Chrome/Discord/OBS.",
+        "Feeds a virtual audio endpoint (e.g., paired virtual mic for Chrome, Discord, or OBS).",
     ),
     NodeType.FILE_RECORDING: NodeSpec(
         NodeType.FILE_RECORDING,
