@@ -284,8 +284,6 @@ class InspectorPanel(QWidget):
 
         self.lbl_title = QLabel("-")
         self.lbl_title.setStyleSheet("font-weight: bold; font-size: 13px; color: #F8FAFC;")
-        self.edit_name = QLineEdit()
-        self.edit_name.editingFinished.connect(self._on_name_changed)
 
         self.lbl_missing_warn = QLabel()
         self.lbl_missing_warn.setWordWrap(True)
@@ -347,7 +345,6 @@ class InspectorPanel(QWidget):
             eq_lay.addLayout(row)
 
         form.addRow("Node Type:", self.lbl_title)
-        form.addRow("Label:", self.edit_name)
         form_root.addWidget(self.lbl_missing_warn)
 
         self._row_device = (QLabel("Audio Device:"), self.cmb_device)
@@ -404,7 +401,6 @@ class InspectorPanel(QWidget):
         self.stack.setCurrentIndex(1)
         spec = node.spec()
         self.lbl_title.setText(f"#{node.id} {spec.title}")
-        self.edit_name.setText(node.name)
 
         # Device selector visibility & contents
         needs_device = node.node_type in (
@@ -468,6 +464,19 @@ class InspectorPanel(QWidget):
         self.slider_gain.setValue(int(round(node.gain_db * 10)))
         self.lbl_gain_val.setText(f"{node.gain_db:+.1f} dB")
 
+        show_mute = node.node_type in (
+            NodeType.APP_CAPTURE,
+            NodeType.SYSTEM_CAPTURE,
+            NodeType.MIC_INPUT,
+            NodeType.LINE_INPUT,
+            NodeType.VIRTUAL_INPUT,
+            NodeType.VOLUME,
+            NodeType.GAIN,
+            NodeType.MUTE,
+            NodeType.SPEAKER_OUTPUT,
+            NodeType.VIRTUAL_OUTPUT,
+        )
+        self.chk_mute.setVisible(show_mute)
         self.chk_mute.setChecked(node.muted)
 
         show_map = node.node_type == NodeType.CHANNEL_MAP
@@ -554,12 +563,6 @@ class InspectorPanel(QWidget):
                 idx = i
                 break
         self.cmb_process.setCurrentIndex(idx)
-
-    def _on_name_changed(self) -> None:
-        if self._loading or not self._node:
-            return
-        self._node.name = self.edit_name.text()
-        self.graph_rebuild_needed.emit()
 
     def _on_device_changed(self) -> None:
         if self._loading or not self._node:
