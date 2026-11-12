@@ -106,7 +106,6 @@ class LeftPalettePanel(QWidget):
     """Left sidebar: Devices, Running Applications, Source/Processing/Output node palette."""
 
     add_node_requested = Signal(int, dict)  # NodeType int, kwargs
-    refresh_requested = Signal()
     close_requested = Signal()
 
     def __init__(self, parent=None) -> None:
@@ -123,9 +122,6 @@ class LeftPalettePanel(QWidget):
         lbl_title.setStyleSheet("color: #FFFFFF; font-weight: 600;")
         hdr.addWidget(lbl_title)
         hdr.addStretch(1)
-        self.btn_refresh = QPushButton("Refresh")
-        self.btn_refresh.clicked.connect(self.refresh_requested.emit)
-        hdr.addWidget(self.btn_refresh)
         self.btn_close = QToolButton(self)
         self.btn_close.setObjectName("TerminalCloseButton")
         self.btn_close.setText("×")

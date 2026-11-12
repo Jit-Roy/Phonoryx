@@ -317,7 +317,7 @@ class AudioFlowMainWindow(QMainWindow):
 
         self.btn_refresh = QToolButton(self.top_bar)
         self.btn_refresh.setObjectName("ComfyIconBtn")
-        self.btn_refresh.setText("↻")
+        self.btn_refresh.setText("Refresh")
         self.btn_refresh.setToolTip("Refresh Windows Audio Devices & Processes (F5)")
         self.btn_refresh.clicked.connect(self.refresh_devices_and_processes)
         top_lay.addWidget(self.btn_refresh)
@@ -392,7 +392,6 @@ class AudioFlowMainWindow(QMainWindow):
 
     def _connect_signals(self) -> None:
         self.left_panel.add_node_requested.connect(self._on_add_node_from_palette)
-        self.left_panel.refresh_requested.connect(self.refresh_devices_and_processes)
         self.left_panel.close_requested.connect(lambda: self.set_palette_visible(False))
 
         self.bottom_panel.close_requested.connect(lambda: self.set_terminal_visible(False))
