@@ -13,7 +13,7 @@ import pytest
 from PySide6.QtCore import QMimeData, QPoint, QPointF, Qt
 from PySide6.QtGui import QDropEvent
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtWidgets import QApplication, QMessageBox, QToolButton
 
 from audioflow.engine_bridge import AudioFlowEngine, DataFlow, DeviceInfo, DeviceRoleHint, NodeType
 from audioflow.models.graph_model import NODE_SPECS, NodeModel, ProjectModel
@@ -388,6 +388,12 @@ def test_workspace_cache_persists_across_restarts(qapp, tmp_path: Path):
         assert grp is not None
         win1.canvas.node_items[n2.id].setPos(410, 125)
         n2.x, n2.y = 410.0, 125.0
+        win1.canvas.centerOn(580, 390)
+        win1.canvas.zoom_in()
+        win1.canvas.zoom_in()
+        qapp.processEvents()
+        saved_view = win1.canvas.get_view_state()
+        assert saved_view["zoom"] == pytest.approx(1.15 * 1.15, rel=1e-3)
         n1_id, n2_id, grp_id = n1.id, n2.id, grp.id
     finally:
         win1.close()
@@ -410,6 +416,12 @@ def test_workspace_cache_persists_across_restarts(qapp, tmp_path: Path):
         assert set(win2.canvas.node_items.keys()) == {n1_id, n2_id}
         assert len(win2.canvas.conn_items) == 1
         assert grp_id in win2.canvas.group_items
+        # Viewport zoom and center location must be faithfully restored
+        restored_view = win2.canvas.get_view_state()
+        assert restored_view["zoom"] == pytest.approx(saved_view["zoom"], rel=1e-3)
+        assert restored_view["center_x"] == pytest.approx(saved_view["center_x"], abs=3.0)
+        assert restored_view["center_y"] == pytest.approx(saved_view["center_y"], abs=3.0)
+        assert win2.canvas.btn_float_zoom.text() == "132%"
     finally:
         win2.close()
 
@@ -420,6 +432,35 @@ def test_workspace_cache_persists_across_restarts(qapp, tmp_path: Path):
     qapp.processEvents()
     win3.close()
     assert cache_file.read_text(encoding="utf-8") == before_bytes
+
+    # Panning & zooming alone on reopen persists new camera without marking clean workflow dirty
+    win4 = AudioFlowMainWindow(auto_start=False, cache_path=cache_file, restore_cache=True)
+    win4.show()
+    qapp.processEvents()
+    try:
+        vp4 = win4.canvas.viewport()
+        start_pt = vp4.rect().center()
+        QTest.mousePress(vp4, Qt.MouseButton.MiddleButton, Qt.KeyboardModifier.NoModifier, start_pt)
+        QTest.mouseMove(vp4, start_pt + QPoint(-110, -70))
+        QTest.mouseRelease(vp4, Qt.MouseButton.MiddleButton, Qt.KeyboardModifier.NoModifier, start_pt + QPoint(-110, -70))
+        win4.canvas.zoom_in()
+        qapp.processEvents()
+        assert not win4._tabs[0].dirty
+        moved_view = win4.canvas.get_view_state()
+        assert moved_view["zoom"] > saved_view["zoom"]
+    finally:
+        win4.close()
+
+    win5 = AudioFlowMainWindow(auto_start=False, cache_path=cache_file, restore_cache=True)
+    win5.show()
+    qapp.processEvents()
+    try:
+        reloaded_view = win5.canvas.get_view_state()
+        assert reloaded_view["zoom"] == pytest.approx(moved_view["zoom"], rel=1e-3)
+        assert reloaded_view["center_x"] == pytest.approx(moved_view["center_x"], abs=3.0)
+        assert reloaded_view["center_y"] == pytest.approx(moved_view["center_y"], abs=3.0)
+    finally:
+        win5.close()
 
 
 def test_virtual_driver_option2_inspector_and_device_prioritization(qapp):
@@ -607,16 +648,33 @@ def test_comfyui_inline_node_widgets_selection_tabs_and_terminal(qapp, tmp_path:
         assert not canvas.node_items[n_vol.id].isSelected()
         assert canvas.node_items[n_eq.id].isSelected()
 
-        # 5. '+' new workflow tab creates fresh clean canvas and keeps previous tab intact
+        # 5. '+' new workflow tab button is compact ComfyUI square; creates fresh canvas & preserves per-tab zoom/location
+        assert win.btn_new_tab.width() <= 32
+        assert win.btn_new_tab.height() <= 32
+        assert not hasattr(canvas, "btn_float_group")
+        assert not hasattr(canvas, "btn_float_del")
+        float_texts = [b.text() for b in canvas.floating_bar.findChildren(QToolButton)]
+        assert "Group" not in float_texts and "Delete" not in float_texts
+        assert float_texts[0] == "Fit"
+
+        canvas.zoom_in()
+        canvas.centerOn(650, 420)
+        qapp.processEvents()
+        tab0_view = canvas.get_view_state()
         assert win.workflow_tabs.count() == 1
         win.btn_new_tab.click()
         qapp.processEvents()
         assert win.workflow_tabs.count() == 2
         assert win.workflow_tabs.currentIndex() == 1
         assert len(win.project.nodes) == 0
+        assert canvas.transform().m11() == pytest.approx(1.0)
         win.workflow_tabs.setCurrentIndex(0)
         qapp.processEvents()
         assert len(win.project.nodes) == 3
+        assert canvas.transform().m11() == pytest.approx(tab0_view["zoom"], rel=1e-3)
+        tab0_restored = canvas.get_view_state()
+        assert tab0_restored["center_x"] == pytest.approx(tab0_view["center_x"], abs=3.0)
+        assert tab0_restored["center_y"] == pytest.approx(tab0_view["center_y"], abs=3.0)
 
         # 6. Bottom Terminal ('Meters, Status & Logs') closes with '×' and reopens cleanly
         assert win.bottom_dock.isVisible()

@@ -132,12 +132,11 @@ QToolButton#NewWorkflowButton {{
     background-color: transparent;
     color: {COMFY_TEXT_SECONDARY};
     border: none;
-    border-right: 1px solid {COMFY_STROKE};
-    padding: 4px 10px;
-    font-size: 16px;
+    border-radius: 6px;
+    padding: 0px;
+    margin: 0px 2px;
+    font-size: 15px;
     font-weight: 500;
-    min-width: 34px;
-    min-height: 32px;
 }}
 QToolButton#NewWorkflowButton:hover {{
     background-color: {COMFY_SURFACE_HOVER};

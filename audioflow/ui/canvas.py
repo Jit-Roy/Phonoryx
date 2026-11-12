@@ -898,6 +898,7 @@ class NodeCanvas(QGraphicsView):
 
     graph_changed = Signal()
     workspace_modified = Signal()
+    viewport_changed = Signal()
     selection_changed = Signal(object)  # Optional[NodeModel]
     validation_error = Signal(str)
     float_param_changed = Signal(int, str, float)
@@ -919,6 +920,7 @@ class NodeCanvas(QGraphicsView):
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setDragMode(QGraphicsView.DragMode.NoDrag)
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
+        self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorViewCenter)
         self.setAcceptDrops(True)
         self.centerOn(260, 180)
 
@@ -927,7 +929,11 @@ class NodeCanvas(QGraphicsView):
         self.group_items: Dict[int, GroupItem] = {}
 
         self._panning = False
+        self._pan_moved = False
         self._pan_start = None
+        self._restoring_viewport = False
+        self._view_state_seq = 0
+        self._pending_view_state: Optional[Tuple[int, Dict[str, float]]] = None
         self._drag_port: Optional[PortItem] = None
         self._detaching_conn: Optional[ConnectionModel] = None
         self._temp_wire: Optional[QGraphicsPathItem] = None
@@ -961,21 +967,12 @@ class NodeCanvas(QGraphicsView):
             b.clicked.connect(slot)
             return b
 
-        self.btn_float_group = _btn("Group", "Group Selected Nodes (Ctrl+G)", lambda: self.group_selected_action())
-        self.btn_float_del = _btn("Delete", "Delete Selected (Del)", self.delete_selected_action)
-        sep = QFrame(self.floating_bar)
-        sep.setFrameShape(QFrame.Shape.VLine)
-        sep.setFixedWidth(1)
-        sep.setStyleSheet(f"background-color: {COMFY_STROKE};")
         self.btn_float_fit = _btn("Fit", "Fit / Reset View", self.fit_view)
         self.btn_float_zout = _btn("−", "Zoom Out", self.zoom_out)
         self.btn_float_zoom = _btn("100%", "Reset Zoom (100%)", self.reset_zoom)
         self.btn_float_zin = _btn("+", "Zoom In", self.zoom_in)
 
         for w in (
-            self.btn_float_group,
-            self.btn_float_del,
-            sep,
             self.btn_float_fit,
             self.btn_float_zout,
             self.btn_float_zoom,
@@ -995,15 +992,80 @@ class NodeCanvas(QGraphicsView):
         self.floating_bar.move(max(8, self.width() - bw - 14), max(8, self.height() - bh - 14))
         self.floating_bar.raise_()
 
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        self._reposition_floating_bar()
+        if self._pending_view_state is not None:
+            seq, state = self._pending_view_state
+            self._apply_view_transform(state)
+            QTimer.singleShot(0, lambda sq=seq: self._finalize_pending_view_state(sq))
+
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
         self._reposition_floating_bar()
+        if self._pending_view_state is not None:
+            self._apply_view_transform(self._pending_view_state[1])
 
     def _update_zoom_label(self) -> None:
         if hasattr(self, "btn_float_zoom"):
             pct = int(round(self.transform().m11() * 100.0))
             self.btn_float_zoom.setText(f"{pct}%")
             self._reposition_floating_bar()
+
+    def get_view_state(self) -> Dict[str, float]:
+        if self._pending_view_state is not None:
+            return dict(self._pending_view_state[1])
+        center = self.mapToScene(self.viewport().rect().center())
+        return {
+            "center_x": float(center.x()),
+            "center_y": float(center.y()),
+            "zoom": float(self.transform().m11()),
+        }
+
+    def _apply_view_transform(self, state: Dict[str, float]) -> None:
+        self._restoring_viewport = True
+        try:
+            zoom = max(0.15, min(4.0, float(state.get("zoom", 1.0))))
+            cx = float(state.get("center_x", 260.0))
+            cy = float(state.get("center_y", 180.0))
+            self.resetTransform()
+            self.scale(zoom, zoom)
+            self.centerOn(cx, cy)
+            self._update_zoom_label()
+        finally:
+            self._restoring_viewport = False
+
+    def _finalize_pending_view_state(self, seq: int) -> None:
+        if self._pending_view_state is not None and self._pending_view_state[0] == seq:
+            state = self._pending_view_state[1]
+            self._pending_view_state = None
+            self._apply_view_transform(state)
+
+    def set_view_state(self, state: Optional[Dict[str, float]]) -> None:
+        if not isinstance(state, dict):
+            return
+        try:
+            norm = {
+                "center_x": float(state.get("center_x", 260.0)),
+                "center_y": float(state.get("center_y", 180.0)),
+                "zoom": max(0.15, min(4.0, float(state.get("zoom", 1.0)))),
+            }
+        except (TypeError, ValueError):
+            return
+        self._view_state_seq += 1
+        seq = self._view_state_seq
+        self._apply_view_transform(norm)
+        if not self.isVisible():
+            self._pending_view_state = (seq, norm)
+        else:
+            self._pending_view_state = None
+
+    def _emit_viewport_changed(self) -> None:
+        if self._restoring_viewport:
+            return
+        self._view_state_seq += 1
+        self._pending_view_state = None
+        self.viewport_changed.emit()
 
     def update_catalog(self, devices: List[DeviceInfo], processes: List[ProcessInfo]) -> None:
         self.devices = list(devices)
@@ -1016,11 +1078,13 @@ class NodeCanvas(QGraphicsView):
             item.setSelected(True)
 
     def fit_view(self) -> None:
-        self.reset_zoom()
+        self.resetTransform()
+        self._update_zoom_label()
         if self.node_items:
             bounds = self.scene_obj.itemsBoundingRect()
             if not bounds.isNull():
                 self.centerOn(bounds.center())
+        self._emit_viewport_changed()
 
     # ----- Background Grid -----
 
@@ -1266,22 +1330,30 @@ class NodeCanvas(QGraphicsView):
 
     # ----- Mouse & Keyboard Interaction -----
 
-    def zoom_in(self) -> None:
-        self.scale(1.15, 1.15)
+    def _apply_zoom_factor(self, factor: float) -> None:
+        cur = float(self.transform().m11())
+        target = max(0.15, min(4.0, cur * factor))
+        if cur > 0.0:
+            step = target / cur
+            self.scale(step, step)
         self._update_zoom_label()
+        self._emit_viewport_changed()
+
+    def zoom_in(self) -> None:
+        self._apply_zoom_factor(1.15)
 
     def zoom_out(self) -> None:
-        self.scale(1.0 / 1.15, 1.0 / 1.15)
-        self._update_zoom_label()
+        self._apply_zoom_factor(1.0 / 1.15)
 
     def reset_zoom(self) -> None:
         self.resetTransform()
         self._update_zoom_label()
+        self._emit_viewport_changed()
 
     def wheelEvent(self, event) -> None:
         factor = 1.15 if event.angleDelta().y() > 0 else 1.0 / 1.15
-        self.scale(factor, factor)
-        self._update_zoom_label()
+        self._apply_zoom_factor(factor)
+        event.accept()
 
     def _find_port_at(self, view_pos) -> Optional[PortItem]:
         search_rect = QRect(view_pos.x() - 10, view_pos.y() - 10, 20, 20)
@@ -1361,6 +1433,7 @@ class NodeCanvas(QGraphicsView):
         pos = event.position().toPoint()
         if event.button() == Qt.MouseButton.MiddleButton:
             self._panning = True
+            self._pan_moved = False
             self._pan_start = pos
             self.setCursor(Qt.CursorShape.ClosedHandCursor)
             event.accept()
@@ -1400,6 +1473,7 @@ class NodeCanvas(QGraphicsView):
                 else:
                     self.scene_obj.clearSelection()
                     self._panning = True
+                    self._pan_moved = False
                     self._pan_start = pos
                     self.setCursor(Qt.CursorShape.ClosedHandCursor)
                     event.accept()
@@ -1423,6 +1497,8 @@ class NodeCanvas(QGraphicsView):
         if self._panning and self._pan_start is not None:
             delta = pos - self._pan_start
             self._pan_start = pos
+            if delta.x() != 0 or delta.y() != 0:
+                self._pan_moved = True
             self.horizontalScrollBar().setValue(self.horizontalScrollBar().value() - delta.x())
             self.verticalScrollBar().setValue(self.verticalScrollBar().value() - delta.y())
             event.accept()
@@ -1445,9 +1521,13 @@ class NodeCanvas(QGraphicsView):
 
     def mouseReleaseEvent(self, event) -> None:
         if self._panning:
+            moved = self._pan_moved
             self._panning = False
+            self._pan_moved = False
             self._pan_start = None
             self.setCursor(Qt.CursorShape.ArrowCursor)
+            if moved:
+                self._emit_viewport_changed()
             event.accept()
             return
 

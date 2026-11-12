@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -44,6 +45,7 @@ class WorkflowTabState:
     project: ProjectModel
     file_path: Optional[Path] = None
     dirty: bool = False
+    view_state: Optional[Dict[str, float]] = None
 
     def base_title(self) -> str:
         return self.file_path.stem if self.file_path is not None else self.title
@@ -90,6 +92,7 @@ class AudioFlowMainWindow(QMainWindow):
         self._tabs: List[WorkflowTabState] = [
             WorkflowTabState(tab_id=self._next_tab_seq, title="Untitled Workflow", project=self.project)
         ]
+        self._active_tab_id: int = self._tabs[0].tab_id
 
         self._devices: List[DeviceInfo] = []
         self._processes: List[ProcessInfo] = []
@@ -285,10 +288,11 @@ class AudioFlowMainWindow(QMainWindow):
         self.btn_new_tab = QToolButton(self.top_bar)
         self.btn_new_tab.setObjectName("NewWorkflowButton")
         self.btn_new_tab.setText("+")
+        self.btn_new_tab.setFixedSize(28, 28)
         self.btn_new_tab.setToolTip("New Blank Workflow (Ctrl+N)")
         self.btn_new_tab.setAccessibleName("New Blank Workflow")
         self.btn_new_tab.clicked.connect(self.new_project_tab)
-        top_lay.addWidget(self.btn_new_tab)
+        top_lay.addWidget(self.btn_new_tab, 0, Qt.AlignmentFlag.AlignVCenter)
 
         top_lay.addStretch(1)
 
@@ -401,6 +405,7 @@ class AudioFlowMainWindow(QMainWindow):
 
         self.canvas.graph_changed.connect(self.sync_graph_to_engine)
         self.canvas.workspace_modified.connect(self._on_canvas_workspace_modified)
+        self.canvas.viewport_changed.connect(self.schedule_cache_save)
         self.canvas.validation_error.connect(self._on_validation_error)
         self.canvas.float_param_changed.connect(self._on_float_param_changed)
         self.canvas.int_param_changed.connect(self._on_int_param_changed)
@@ -472,7 +477,13 @@ class AudioFlowMainWindow(QMainWindow):
     def _on_workflow_tab_changed(self, new_idx: int) -> None:
         if not (0 <= new_idx < len(self._tabs)):
             return
+        if not self._restoring_cache:
+            for prev in self._tabs:
+                if prev.tab_id == self._active_tab_id:
+                    prev.view_state = self.canvas.get_view_state()
+                    break
         tab = self._tabs[new_idx]
+        self._active_tab_id = tab.tab_id
         self._switching_tabs = True
         try:
             self.project = tab.project
@@ -480,6 +491,11 @@ class AudioFlowMainWindow(QMainWindow):
             self.canvas.project = self.project
             self.canvas.rebuild_from_project()
             self.canvas.update_catalog(self._devices, self._processes)
+            self.canvas.set_view_state(
+                tab.view_state
+                if tab.view_state is not None
+                else {"center_x": 260.0, "center_y": 180.0, "zoom": 1.0}
+            )
             self.sync_graph_to_engine()
             self._sync_window_title()
             self._update_undo_redo_buttons()
@@ -662,7 +678,10 @@ class AudioFlowMainWindow(QMainWindow):
                         bak.write_text(existing, encoding="utf-8")
                 except OSError:
                     pass
-            self.project.save_file(self.cache_path)
+            data = self.project.to_project_dict()
+            data["viewport"] = self.canvas.get_view_state()
+            self.cache_path.parent.mkdir(parents=True, exist_ok=True)
+            self.cache_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
             self._cache_dirty = False
         except OSError as exc:
             self.bottom_panel.append_log("WARN", f"Failed to write workspace cache: {exc}")
@@ -673,13 +692,18 @@ class AudioFlowMainWindow(QMainWindow):
         self._restoring_cache = True
         try:
             avail_ids = {d.id for d in self._devices}
-            missing = self.project.load_file(self.cache_path, available_device_ids=avail_ids)
+            raw = json.loads(self.cache_path.read_text(encoding="utf-8"))
+            missing = self.project.load_project_dict(raw, available_device_ids=avail_ids)
             self.canvas.rebuild_from_project()
             self.canvas.update_catalog(self._devices, self._processes)
+            vp = raw.get("viewport")
+            if isinstance(vp, dict):
+                self.canvas.set_view_state(vp)
             self.sync_graph_to_engine()
             idx = self.workflow_tabs.currentIndex()
             if 0 <= idx < len(self._tabs):
                 self._tabs[idx].dirty = False
+                self._tabs[idx].view_state = dict(vp) if isinstance(vp, dict) else None
                 self._refresh_tab_title(idx)
             if missing:
                 self.bottom_panel.append_log(
@@ -707,8 +731,10 @@ class AudioFlowMainWindow(QMainWindow):
             if 0 <= idx < len(self._tabs):
                 self._tabs[idx].file_path = None
                 self._tabs[idx].dirty = False
+                self._tabs[idx].view_state = None
                 self._refresh_tab_title(idx)
             self.canvas.rebuild_from_project()
+            self.canvas.set_view_state({"center_x": 260.0, "center_y": 180.0, "zoom": 1.0})
             self.sync_graph_to_engine()
             self._cache_dirty = True
             self.save_workspace_cache()
