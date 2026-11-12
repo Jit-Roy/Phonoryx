@@ -1,0 +1,151 @@
+;
+; AudioFlowVirtualAudio.inf
+; Custom WDM/KS Virtual Audio Driver for AudioFlow Studio
+;
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = MEDIA
+ClassGUID   = {4d36e96c-e325-11ce-bfc1-08002be10318}
+Provider    = %ManufacturerName%
+DriverVer   = 11/12/2026,1.0.0.1
+CatalogFile = AudioFlowVirtualAudio.cat
+PnpLockdown = 1
+
+[DestinationDirs]
+DefaultDestDir = 13 ; DriverStore
+
+[SourceDisksNames]
+1 = %DiskName%,,,
+
+[SourceDisksFiles]
+AudioFlowVirtualAudio.sys = 1
+
+[Manufacturer]
+%ManufacturerName% = AudioFlowDevices,NTamd64.10.0...17763
+
+[AudioFlowDevices.NTamd64.10.0...17763]
+%DeviceDesc% = AudioFlowInst,Root\AudioFlowVirtualAudio
+
+[AudioFlowInst.NTamd64]
+Include = ks.inf,wdmaudio.inf
+Needs   = KS.Registration,WDMAUDIO.Registration
+CopyFiles = AudioFlowInst.CopyFiles
+AddReg    = AudioFlowInst.AddReg
+
+[AudioFlowInst.CopyFiles]
+AudioFlowVirtualAudio.sys
+
+[AudioFlowInst.AddReg]
+HKR,,AssociatedFilters,,"wdmaud,redbook"
+HKR,,Driver,,AudioFlowVirtualAudio.sys
+HKR,Drivers,SubClasses,,"wave,mixer"
+HKR,Drivers\wave\wdmaud.drv,Driver,,wdmaud.drv
+HKR,Drivers\mixer\wdmaud.drv,Driver,,wdmaud.drv
+HKR,Drivers\wave\wdmaud.drv,Description,,%DeviceDesc%
+HKR,Drivers\mixer\wdmaud.drv,Description,,%DeviceDesc%
+
+; Custom KS category friendly names for Virtual Output & Virtual Mic endpoints
+HKLM,%MEDIA_CATEGORIES%\%AF.Render1Guid%,Name,,%AF.Render1Name%
+HKLM,%MEDIA_CATEGORIES%\%AF.Render1Guid%,Display,1,00,00,00,00
+HKLM,%MEDIA_CATEGORIES%\%AF.Render2Guid%,Name,,%AF.Render2Name%
+HKLM,%MEDIA_CATEGORIES%\%AF.Render2Guid%,Display,1,00,00,00,00
+HKLM,%MEDIA_CATEGORIES%\%AF.Render3Guid%,Name,,%AF.Render3Name%
+HKLM,%MEDIA_CATEGORIES%\%AF.Render3Guid%,Display,1,00,00,00,00
+HKLM,%MEDIA_CATEGORIES%\%AF.Render4Guid%,Name,,%AF.Render4Name%
+HKLM,%MEDIA_CATEGORIES%\%AF.Render4Guid%,Display,1,00,00,00,00
+
+HKLM,%MEDIA_CATEGORIES%\%AF.Capture1Guid%,Name,,%AF.Capture1Name%
+HKLM,%MEDIA_CATEGORIES%\%AF.Capture1Guid%,Display,1,00,00,00,00
+HKLM,%MEDIA_CATEGORIES%\%AF.Capture2Guid%,Name,,%AF.Capture2Name%
+HKLM,%MEDIA_CATEGORIES%\%AF.Capture2Guid%,Display,1,00,00,00,00
+HKLM,%MEDIA_CATEGORIES%\%AF.Capture3Guid%,Name,,%AF.Capture3Name%
+HKLM,%MEDIA_CATEGORIES%\%AF.Capture3Guid%,Display,1,00,00,00,00
+HKLM,%MEDIA_CATEGORIES%\%AF.Capture4Guid%,Name,,%AF.Capture4Name%
+HKLM,%MEDIA_CATEGORIES%\%AF.Capture4Guid%,Display,1,00,00,00,00
+
+[AudioFlowInst.NTamd64.Services]
+AddService = AudioFlowVirtualAudio,0x00000002,AudioFlowServiceInst
+
+[AudioFlowServiceInst]
+DisplayName   = %ServiceDesc%
+ServiceType   = 1 ; SERVICE_KERNEL_DRIVER
+StartType     = 3 ; SERVICE_DEMAND_START
+ErrorControl  = 1 ; SERVICE_ERROR_NORMAL
+ServiceBinary = %13%\AudioFlowVirtualAudio.sys
+
+[AudioFlowInst.NTamd64.Interfaces]
+AddInterface = %KSCATEGORY_AUDIO%,%WaveOut1%,AudioFlow.I.WaveOut1
+AddInterface = %KSCATEGORY_RENDER%,%WaveOut1%,AudioFlow.I.WaveOut1
+AddInterface = %KSCATEGORY_REALTIME%,%WaveOut1%,AudioFlow.I.WaveOut1
+AddInterface = %KSCATEGORY_AUDIO%,%TopoOut1%,AudioFlow.I.TopoOut1
+AddInterface = %KSCATEGORY_TOPOLOGY%,%TopoOut1%,AudioFlow.I.TopoOut1
+
+AddInterface = %KSCATEGORY_AUDIO%,%WaveIn1%,AudioFlow.I.WaveIn1
+AddInterface = %KSCATEGORY_CAPTURE%,%WaveIn1%,AudioFlow.I.WaveIn1
+AddInterface = %KSCATEGORY_REALTIME%,%WaveIn1%,AudioFlow.I.WaveIn1
+AddInterface = %KSCATEGORY_AUDIO%,%TopoIn1%,AudioFlow.I.TopoIn1
+AddInterface = %KSCATEGORY_TOPOLOGY%,%TopoIn1%,AudioFlow.I.TopoIn1
+
+[AudioFlow.I.WaveOut1]
+AddReg = AudioFlow.I.WaveOut1.AddReg
+[AudioFlow.I.WaveOut1.AddReg]
+HKR,,CLSID,,%Proxy.CLSID%
+HKR,,FriendlyName,,%AF.Render1Name%
+
+[AudioFlow.I.TopoOut1]
+AddReg = AudioFlow.I.TopoOut1.AddReg
+[AudioFlow.I.TopoOut1.AddReg]
+HKR,,CLSID,,%Proxy.CLSID%
+HKR,,FriendlyName,,%AF.Render1Name%
+
+[AudioFlow.I.WaveIn1]
+AddReg = AudioFlow.I.WaveIn1.AddReg
+[AudioFlow.I.WaveIn1.AddReg]
+HKR,,CLSID,,%Proxy.CLSID%
+HKR,,FriendlyName,,%AF.Capture1Name%
+
+[AudioFlow.I.TopoIn1]
+AddReg = AudioFlow.I.TopoIn1.AddReg
+[AudioFlow.I.TopoIn1.AddReg]
+HKR,,CLSID,,%Proxy.CLSID%
+HKR,,FriendlyName,,%AF.Capture1Name%
+
+[Strings]
+ManufacturerName = "AudioFlow Studio"
+DiskName         = "AudioFlow Virtual Audio Driver Disk"
+DeviceDesc       = "AudioFlow Virtual Audio Device"
+ServiceDesc      = "AudioFlow Virtual Audio Kernel Driver"
+Proxy.CLSID      = "{17CCA71B-ECD7-11D0-B908-00A0C9223196}"
+
+KSCATEGORY_AUDIO    = "{6994AD04-93EF-11D0-A3CC-00A0C9223196}"
+KSCATEGORY_RENDER   = "{65E8773E-8F56-11D0-A3B9-00A0C9223196}"
+KSCATEGORY_CAPTURE  = "{65E8773D-8F56-11D0-A3B9-00A0C9223196}"
+KSCATEGORY_TOPOLOGY = "{DDA54A40-1E4C-11D1-A050-405705C10000}"
+KSCATEGORY_REALTIME = "{EB115FFC-10C8-4964-831D-6DCB02E6F23F}"
+
+MEDIA_CATEGORIES    = "SYSTEM\CurrentControlSet\Control\MediaCategories"
+
+WaveOut1 = "WaveOut1"
+TopoOut1 = "TopoOut1"
+WaveIn1  = "WaveIn1"
+TopoIn1  = "TopoIn1"
+
+AF.Render1Guid  = "{A110F001-7C3F-4E91-9B14-6D52F1A84010}"
+AF.Render2Guid  = "{A110F002-7C3F-4E91-9B14-6D52F1A84010}"
+AF.Render3Guid  = "{A110F003-7C3F-4E91-9B14-6D52F1A84010}"
+AF.Render4Guid  = "{A110F004-7C3F-4E91-9B14-6D52F1A84010}"
+AF.Capture1Guid = "{A110F101-7C3F-4E91-9B14-6D52F1A84010}"
+AF.Capture2Guid = "{A110F102-7C3F-4E91-9B14-6D52F1A84010}"
+AF.Capture3Guid = "{A110F103-7C3F-4E91-9B14-6D52F1A84010}"
+AF.Capture4Guid = "{A110F104-7C3F-4E91-9B14-6D52F1A84010}"
+
+AF.Render1Name  = "AudioFlow Virtual Output 1"
+AF.Render2Name  = "AudioFlow Virtual Output 2"
+AF.Render3Name  = "AudioFlow Virtual Output 3"
+AF.Render4Name  = "AudioFlow Virtual Output 4"
+AF.Capture1Name = "AudioFlow Virtual Mic 1"
+AF.Capture2Name = "AudioFlow Virtual Mic 2"
+AF.Capture3Name = "AudioFlow Virtual Mic 3"
+AF.Capture4Name = "AudioFlow Virtual Mic 4"
+

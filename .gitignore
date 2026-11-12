@@ -1,0 +1,37 @@
+# Python & Virtual Environments
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+
+# CMake / Native Builds
+build/
+out/
+*.dll
+*.exe
+*.lib
+*.exp
+*.pdb
+*.ilk
+*.obj
+*.tlog
+*.log
+*.lastbuildstate
+
+# WDK Driver Build Artifacts
+driver/x64/
+driver/Debug/
+driver/Release/
+*.sys
+*.cat
+*.cer
+
+# Local Runtime / Editor Logs & Artifacts
+.audioflow_err.txt
+.vscode/
+.vs/
+*.user
+*.aflow
