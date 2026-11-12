@@ -1130,6 +1130,184 @@ def test_save_location_and_node_resize_persist_across_restarts(qapp, monkeypatch
         win2.close()
 
 
+def test_per_tab_run_stop_runs_multiple_tabs_simultaneously(qapp, tmp_path: Path):
+    """Switching tabs must not stop/overwrite other tabs, and btn_engine toggles only the active tab."""
+    created_engines = []
+
+    class SpyEngine:
+        def __init__(self) -> None:
+            self.running = False
+            self.closed = False
+            self.applied_graphs = []
+            created_engines.append(self)
+
+        @property
+        def is_running(self) -> bool:
+            return self.running
+
+        def start(self) -> bool:
+            self.running = True
+            return True
+
+        def stop(self) -> None:
+            self.running = False
+
+        def close(self) -> None:
+            self.running = False
+            self.closed = True
+
+        def enumerate_devices(self):
+            return []
+
+        def enumerate_processes(self):
+            return []
+
+        def device_change_seq(self) -> int:
+            return 1
+
+        def apply_graph(self, payload: dict):
+            self.applied_graphs.append(payload)
+            return True, ""
+
+        def set_float_param(self, node_id: int, param: str, val: float) -> bool:
+            return True
+
+        def set_int_param(self, node_id: int, param: str, val: int) -> bool:
+            return True
+
+        def get_node_meters(self):
+            return {}
+
+        def get_engine_stats(self):
+            from audioflow.engine_bridge import EngineStats
+            return EngineStats(
+                running=self.running,
+                sample_rate=48000,
+                block_frames=256,
+                active_nodes=len(self.applied_graphs[-1]["nodes"]) if self.applied_graphs else 0,
+                active_connections=0,
+                virtual_endpoints=0,
+                total_xruns=0,
+                cpu_load_percent=0.0,
+                processed_blocks=1 if self.running else 0,
+                device_change_seq=1,
+            )
+
+        def poll_logs(self):
+            return []
+
+    win = AudioFlowMainWindow(
+        auto_start=False,
+        cache_path=tmp_path / "multi_run_cache.json",
+        restore_cache=False,
+        engine_factory=SpyEngine,
+    )
+    try:
+        win.show()
+        qapp.processEvents()
+        assert len(created_engines) == 1
+        eng0 = win._tabs[0].engine
+        assert win.btn_engine.text() == " Run"
+        assert not bool(win.btn_engine.property("running"))
+
+        # Add node to Tab 0 and click Run -> Tab 0 runs (button turns red ' Stop')
+        win.canvas.add_node_action(NodeType.VOLUME, scene_pos=QPointF(100, 100))
+        win.btn_engine.click()
+        qapp.processEvents()
+        assert eng0.is_running is True
+        assert win.btn_engine.text() == " Stop"
+        assert bool(win.btn_engine.property("running")) is True
+        tab0_applies_before_switch = len(eng0.applied_graphs)
+
+        # Open Tab 1 -> Tab 0 keeps running; Tab 1 starts stopped (' Run')
+        win.btn_new_tab.click()
+        qapp.processEvents()
+        assert win.workflow_tabs.count() == 2
+        assert win.workflow_tabs.currentIndex() == 1
+        eng1 = win._tabs[1].engine
+        assert eng1 is not eng0
+        assert eng0.is_running is True
+        assert eng1.is_running is False
+        assert win.btn_engine.text() == " Run"
+        assert not bool(win.btn_engine.property("running"))
+        assert len(eng0.applied_graphs) == tab0_applies_before_switch
+
+        # Editing & starting Tab 1 runs BOTH tabs simultaneously without touching Tab 0
+        win.canvas.add_node_action(NodeType.GAIN, scene_pos=QPointF(150, 150))
+        win.btn_engine.click()
+        qapp.processEvents()
+        assert eng0.is_running is True
+        assert eng1.is_running is True
+        assert win.btn_engine.text() == " Stop"
+        assert len(eng0.applied_graphs) == tab0_applies_before_switch
+
+        # Switching back to Tab 0 just to inspect leaves BOTH running and avoids re-applying graphs
+        win.workflow_tabs.setCurrentIndex(0)
+        qapp.processEvents()
+        assert win.btn_engine.text() == " Stop"
+        assert eng0.is_running is True
+        assert eng1.is_running is True
+        assert len(eng0.applied_graphs) == tab0_applies_before_switch
+
+        # Stopping Tab 0 via red ' Stop' button stops ONLY Tab 0; Tab 1 keeps running
+        win.btn_engine.click()
+        qapp.processEvents()
+        assert eng0.is_running is False
+        assert eng1.is_running is True
+        assert win.btn_engine.text() == " Run"
+        assert "1 bg tab running" in win.lbl_status_engine.text()
+
+        # Closing Tab 0 closes eng0 and leaves eng1 running
+        win.close_workflow_tab(0)
+        qapp.processEvents()
+        assert eng0.closed is True
+        assert eng1.is_running is True
+        assert win.btn_engine.text() == " Stop"
+    finally:
+        win.close()
+
+    assert eng1.closed is True
+
+
+def test_real_native_engines_run_concurrently_across_tabs(qapp, tmp_path: Path):
+    """Two tabs backed by real C++ AudioFlowEngine instances run and stop independently."""
+    win = AudioFlowMainWindow(
+        auto_start=True,
+        cache_path=tmp_path / "native_multi_tab_cache.json",
+        restore_cache=False,
+    )
+    try:
+        win.show()
+        qapp.processEvents()
+        eng0 = win._tabs[0].engine
+        assert isinstance(eng0, AudioFlowEngine)
+        assert eng0.is_running is True
+
+        win.btn_new_tab.click()
+        qapp.processEvents()
+        eng1 = win._tabs[1].engine
+        assert isinstance(eng1, AudioFlowEngine)
+        assert eng1 is not eng0
+        assert eng0.is_running is True
+        assert eng1.is_running is False
+        assert win.btn_engine.text() == " Run"
+
+        # Start Tab 1 as well -> both real C++ engines live concurrently
+        win.btn_engine.click()
+        qapp.processEvents()
+        assert eng0.is_running is True
+        assert eng1.is_running is True
+        assert win.btn_engine.text() == " Stop"
+
+        # Stop only Tab 1; Tab 0 remains running
+        win.btn_engine.click()
+        qapp.processEvents()
+        assert eng0.is_running is True
+        assert eng1.is_running is False
+    finally:
+        win.close()
+
+
 
 
 

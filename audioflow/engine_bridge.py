@@ -313,6 +313,10 @@ class AudioFlowEngine:
         if self._handle:
             self._lib.af_engine_stop(self._handle)
 
+    @property
+    def is_running(self) -> bool:
+        return bool(self._handle and self.get_engine_stats().running)
+
     def enumerate_devices(self, max_devices: int = 128) -> List[DeviceInfo]:
         if not self._handle:
             return []

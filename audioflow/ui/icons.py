@@ -86,7 +86,7 @@ def _draw_app_brand(p: QPainter, r: QRectF) -> None:
         p.drawLine(QPointF(w * x_rel, h * y0_rel), QPointF(w * x_rel, h * y1_rel))
 
 
-def _draw_section_tab(p: QPainter, r: QRectF, color_hex: str) -> None:
+def _draw_section_tab(p: QPainter, r: QRectF, color_hex: str, running: bool = False) -> None:
     w, h = r.width(), r.height()
     col = QColor(color_hex)
     p.setPen(Qt.PenStyle.NoPen)
@@ -101,6 +101,10 @@ def _draw_section_tab(p: QPainter, r: QRectF, color_hex: str) -> None:
     p.drawRoundedRect(QRectF(w * 0.42, h * 0.34, w * 0.34, h * 0.12), 1.0, 1.0)
     p.setBrush(QColor("#B8B2CA"))
     p.drawRoundedRect(QRectF(w * 0.42, h * 0.54, w * 0.26, h * 0.10), 1.0, 1.0)
+    if running:
+        p.setPen(_pen("#1B1B1C", max(1.2, w * 0.08)))
+        p.setBrush(QColor("#00C753"))
+        p.drawEllipse(QRectF(w * 0.56, h * 0.56, w * 0.34, h * 0.34))
 
 
 def _draw_new_doc(p: QPainter, r: QRectF) -> None:
@@ -561,10 +565,10 @@ def ui_icon(name: str, size: int = 18) -> QIcon:
     return _render_icon(drawer, size)
 
 
-@lru_cache(maxsize=32)
-def workflow_tab_icon(color_hex: str, size: int = 15) -> QIcon:
+@lru_cache(maxsize=64)
+def workflow_tab_icon(color_hex: str, size: int = 15, running: bool = False) -> QIcon:
     """Return a OneNote-section-colored page tab icon for workflow tabs."""
-    return _render_icon(lambda p, r: _draw_section_tab(p, r, color_hex), size)
+    return _render_icon(lambda p, r: _draw_section_tab(p, r, color_hex, running=running), size)
 
 
 @lru_cache(maxsize=32)

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from PySide6.QtCore import QEvent, QSize, Qt, QTimer
 from PySide6.QtGui import QAction, QKeySequence
@@ -53,6 +53,9 @@ class WorkflowTabState:
     file_path: Optional[Path] = None
     dirty: bool = False
     view_state: Optional[Dict[str, float]] = None
+    engine: Any = None
+    owns_engine: bool = True
+    _icon_running_state: Optional[bool] = None
 
     def base_title(self) -> str:
         return self.file_path.stem if self.file_path is not None else self.title
@@ -98,6 +101,7 @@ class AudioFlowMainWindow(QMainWindow):
         auto_start: bool = True,
         cache_path: Optional[Path] = None,
         restore_cache: bool = True,
+        engine_factory: Optional[Callable[[], Any]] = None,
     ) -> None:
         super().__init__()
         self.setWindowTitle("Untitled Workflow — AudioFlow Studio")
@@ -112,7 +116,9 @@ class AudioFlowMainWindow(QMainWindow):
 
         self.setStyleSheet(STUDIO_STYLESHEET)
 
-        self.engine = engine if engine is not None else AudioFlowEngine(sample_rate=48000, block_frames=256)
+        self._engine_factory = engine_factory
+        initial_engine = engine if engine is not None else self._create_tab_engine()
+        self.engine = initial_engine
         self._owns_engine = engine is None
         self.cache_path = cache_path if cache_path is not None else DEFAULT_CACHE_PATH
         self._persist_cache = bool(restore_cache or cache_path is not None)
@@ -133,7 +139,13 @@ class AudioFlowMainWindow(QMainWindow):
         self.project = ProjectModel()
         self.project_path: Optional[Path] = None
         self._tabs: List[WorkflowTabState] = [
-            WorkflowTabState(tab_id=self._next_tab_seq, title="Untitled Workflow", project=self.project)
+            WorkflowTabState(
+                tab_id=self._next_tab_seq,
+                title="Untitled Workflow",
+                project=self.project,
+                engine=initial_engine,
+                owns_engine=(engine is None),
+            )
         ]
         self._active_tab_id: int = self._tabs[0].tab_id
         self._tab_rename_editor: Optional[_TabRenameLineEdit] = None
@@ -652,10 +664,54 @@ class AudioFlowMainWindow(QMainWindow):
             return self._tabs[idx]
         return self._tabs[0]
 
+    def _tab_accent_color(self, tab: WorkflowTabState) -> str:
+        return ONENOTE_SECTION_COLORS[(tab.tab_id - 1) % len(ONENOTE_SECTION_COLORS)]
+
+    def _create_tab_engine(self) -> Any:
+        if self._engine_factory is not None:
+            return self._engine_factory()
+        return AudioFlowEngine(sample_rate=48000, block_frames=256)
+
+    @staticmethod
+    def _is_engine_running(engine: Any) -> bool:
+        if engine is None:
+            return False
+        if hasattr(engine, "is_running"):
+            try:
+                return bool(engine.is_running)
+            except Exception:
+                pass
+        try:
+            return bool(engine.get_engine_stats().running)
+        except Exception:
+            return False
+
+    def _close_tab_engine(self, tab: WorkflowTabState) -> None:
+        eng = tab.engine
+        if eng is None or not tab.owns_engine:
+            return
+        if any(t is not tab and t.engine is eng for t in self._tabs):
+            return
+        try:
+            eng.close()
+        except Exception:
+            pass
+
+    def _sync_tab_visual(self, idx: int, force: bool = False) -> None:
+        if not (0 <= idx < len(self._tabs)) or not hasattr(self, "workflow_tabs"):
+            return
+        tab = self._tabs[idx]
+        running = self._is_engine_running(tab.engine)
+        if force or tab._icon_running_state != running:
+            tab._icon_running_state = running
+            accent = self._tab_accent_color(tab)
+            self.workflow_tabs.setTabIcon(idx, workflow_tab_icon(accent, 14, running=running))
+
     def _refresh_tab_title(self, idx: int) -> None:
         if 0 <= idx < len(self._tabs):
             tab = self._tabs[idx]
             self.workflow_tabs.setTabText(idx, tab.display_title())
+            self._sync_tab_visual(idx)
             if idx == self.workflow_tabs.currentIndex():
                 self._sync_window_title()
 
@@ -685,6 +741,10 @@ class AudioFlowMainWindow(QMainWindow):
         try:
             self.project = tab.project
             self.project_path = tab.file_path
+            if tab.engine is None:
+                tab.engine = self._create_tab_engine()
+                tab.owns_engine = True
+            self.engine = tab.engine
             self.canvas.project = self.project
             self.canvas.rebuild_from_project()
             self.canvas.update_catalog(self._devices, self._processes)
@@ -693,7 +753,10 @@ class AudioFlowMainWindow(QMainWindow):
                 if tab.view_state is not None
                 else {"center_x": 260.0, "center_y": 180.0, "zoom": 1.0}
             )
-            self.sync_graph_to_engine()
+            self.bottom_panel.update_connections(self.project.nodes, self.project.connections)
+            self._sync_run_button(self._is_engine_running(self.engine))
+            self._sync_tab_visual(new_idx)
+            self._refresh_active_tab_telemetry()
             self._sync_window_title()
             self._update_undo_redo_buttons()
         finally:
@@ -784,8 +847,10 @@ class AudioFlowMainWindow(QMainWindow):
         return True
 
     def _add_workflow_tab_item(self, tab: WorkflowTabState) -> int:
-        accent = ONENOTE_SECTION_COLORS[(tab.tab_id - 1) % len(ONENOTE_SECTION_COLORS)]
-        idx = self.workflow_tabs.addTab(workflow_tab_icon(accent, 14), tab.display_title())
+        accent = self._tab_accent_color(tab)
+        running = self._is_engine_running(tab.engine)
+        tab._icon_running_state = running
+        idx = self.workflow_tabs.addTab(workflow_tab_icon(accent, 14, running=running), tab.display_title())
         close_btn = QToolButton(self.workflow_tabs)
         close_btn.setObjectName("TerminalCloseButton")
         close_btn.setText("×")
@@ -818,7 +883,14 @@ class AudioFlowMainWindow(QMainWindow):
         self._next_tab_seq += 1
         proj = ProjectModel()
         title = f"Untitled Workflow {self._next_tab_seq}"
-        tab = WorkflowTabState(tab_id=self._next_tab_seq, title=title, project=proj, dirty=False)
+        tab = WorkflowTabState(
+            tab_id=self._next_tab_seq,
+            title=title,
+            project=proj,
+            dirty=False,
+            engine=self._create_tab_engine(),
+            owns_engine=True,
+        )
         self._tabs.append(tab)
         new_idx = self._add_workflow_tab_item(tab)
         self.workflow_tabs.setCurrentIndex(new_idx)
@@ -832,8 +904,9 @@ class AudioFlowMainWindow(QMainWindow):
         if len(self._tabs) == 1:
             self.new_project()
             return
-        self._tabs.pop(idx)
+        removed = self._tabs.pop(idx)
         self.workflow_tabs.removeTab(idx)
+        self._close_tab_engine(removed)
         self._sync_window_title()
         if not self._restoring_cache:
             self.schedule_cache_save()
@@ -864,21 +937,31 @@ class AudioFlowMainWindow(QMainWindow):
         self._last_device_seq = self.engine.device_change_seq()
 
         avail_ids = {d.id for d in self._devices}
-        avail_changed = False
-        for node in self.project.nodes.values():
-            if node.device_id:
-                now_avail = node.device_id in avail_ids
-                if node.device_available != now_avail:
-                    avail_changed = True
-                node.device_available = now_avail
+        active_tab = self._active_tab()
+        resync_tabs: List[WorkflowTabState] = []
+        for tab in self._tabs:
+            tab_changed = False
+            for node in tab.project.nodes.values():
+                if node.device_id:
+                    now_avail = node.device_id in avail_ids
+                    if node.device_available != now_avail:
+                        tab_changed = True
+                    node.device_available = now_avail
+            if tab_changed and self._is_engine_running(tab.engine):
+                resync_tabs.append(tab)
 
         self.left_panel.set_devices(self._devices)
         self.left_panel.set_processes(self._processes)
         self.canvas.update_catalog(self._devices, self._processes)
         self.bottom_panel.update_devices_table(self._devices)
         self.bottom_panel.push_native_logs(self.engine.poll_logs())
-        if avail_changed and self.engine.is_running:
-            self.sync_graph_to_engine()
+        for tab in resync_tabs:
+            if tab is active_tab:
+                self.sync_graph_to_engine()
+            elif tab.engine is not None:
+                ok, err = tab.engine.apply_graph(tab.project.to_engine_payload())
+                if not ok and err:
+                    self.bottom_panel.append_log("ERROR", f"Graph sync error ({tab.base_title()}): {err}")
         if log_feedback:
             audio_active = sum(1 for p in self._processes if p.has_audio_session)
             self.bottom_panel.append_log(
@@ -903,19 +986,30 @@ class AudioFlowMainWindow(QMainWindow):
         self.btn_engine.style().polish(self.btn_engine)
 
     def start_engine(self) -> None:
-        if self.engine.start():
+        idx = self.workflow_tabs.currentIndex()
+        tab = self._active_tab()
+        eng = tab.engine
+        if eng is not None and eng.start():
             self._sync_run_button(True)
             self.sync_graph_to_engine()
-            self.bottom_panel.append_log("INFO", "Real-time audio engine started.")
+            self._sync_tab_visual(idx, force=True)
+            self._refresh_active_tab_telemetry()
+            self.bottom_panel.append_log("INFO", f"Real-time audio engine started ({tab.base_title()}).")
         else:
             self._sync_run_button(False)
-            self.bottom_panel.append_log("ERROR", "Failed to start audio engine.")
+            self._sync_tab_visual(idx, force=True)
+            self.bottom_panel.append_log("ERROR", f"Failed to start audio engine ({tab.base_title()}).")
 
     def stop_engine(self) -> None:
-        self.engine.stop()
+        idx = self.workflow_tabs.currentIndex()
+        tab = self._active_tab()
+        if tab.engine is not None:
+            tab.engine.stop()
         self._sync_run_button(False)
-        self.lbl_status_engine.setText("Engine Stopped")
-        self.bottom_panel.append_log("INFO", "Audio engine stopped.")
+        self._sync_tab_visual(idx, force=True)
+        self.canvas.update_meters({})
+        self._refresh_active_tab_telemetry()
+        self.bottom_panel.append_log("INFO", f"Audio engine stopped ({tab.base_title()}).")
 
     def _toggle_engine(self, checked: bool) -> None:
         if checked:
@@ -945,6 +1039,24 @@ class AudioFlowMainWindow(QMainWindow):
         self.lbl_status_engine.setText(msg)
         self.bottom_panel.append_log("WARN", msg)
 
+    def _refresh_active_tab_telemetry(self) -> None:
+        if self.engine is None or not hasattr(self, "lbl_status_engine"):
+            return
+        stats = self.engine.get_engine_stats()
+        meters = self.engine.get_node_meters()
+        self.canvas.update_meters(meters)
+        self.bottom_panel.update_telemetry(stats, self.project.nodes, meters)
+        state = "Running" if stats.running else "Stopped"
+        bg_running = sum(
+            1
+            for t in self._tabs
+            if t.tab_id != self._active_tab_id and self._is_engine_running(t.engine)
+        )
+        bg_suffix = f"  •  {bg_running} bg tab{'s' if bg_running != 1 else ''} running" if bg_running > 0 else ""
+        self.lbl_status_engine.setText(
+            f"Engine {state}  •  {stats.sample_rate} Hz  •  {stats.active_nodes} nodes  •  Blocks: {stats.processed_blocks}{bg_suffix}"
+        )
+
     def _poll_engine_telemetry(self) -> None:
         if self.isMinimized():
             return
@@ -953,18 +1065,16 @@ class AudioFlowMainWindow(QMainWindow):
             self.refresh_devices_and_processes()
             self.bottom_panel.append_log("INFO", "Windows audio device change detected; catalog updated.")
 
-        stats = self.engine.get_engine_stats()
-        meters = self.engine.get_node_meters()
-        logs = self.engine.poll_logs()
-
-        self.canvas.update_meters(meters)
-        self.bottom_panel.update_telemetry(stats, self.project.nodes, meters)
-        state = "Running" if stats.running else "Stopped"
-        self.lbl_status_engine.setText(
-            f"Engine {state}  •  {stats.sample_rate} Hz  •  {stats.active_nodes} nodes  •  Blocks: {stats.processed_blocks}"
-        )
-        if logs:
-            self.bottom_panel.push_native_logs(logs)
+        self._refresh_active_tab_telemetry()
+        seen_engines = set()
+        for idx, tab in enumerate(self._tabs):
+            eng = tab.engine
+            if eng is not None and id(eng) not in seen_engines:
+                seen_engines.add(id(eng))
+                logs = eng.poll_logs()
+                if logs:
+                    self.bottom_panel.push_native_logs(logs)
+            self._sync_tab_visual(idx)
 
     # ----- Project Cache & Persistence -----
 
@@ -1079,12 +1189,25 @@ class AudioFlowMainWindow(QMainWindow):
                     except (TypeError, ValueError):
                         active_idx = 0
                     active_idx = max(0, min(len(restored_tabs) - 1, active_idx))
+                    prev_tabs = list(self._tabs)
+                    prev_active_eng = prev_tabs[0].engine if prev_tabs else self.engine
+                    prev_active_owns = prev_tabs[0].owns_engine if prev_tabs else self._owns_engine
+                    for i, rtab in enumerate(restored_tabs):
+                        if i == active_idx and prev_active_eng is not None:
+                            rtab.engine = prev_active_eng
+                            rtab.owns_engine = prev_active_owns
+                        else:
+                            rtab.engine = self._create_tab_engine()
+                            rtab.owns_engine = True
                     self._tabs = restored_tabs
+                    for old_t in prev_tabs[1:]:
+                        self._close_tab_engine(old_t)
                     self._rebuild_workflow_tab_bar(active_idx)
                     active_tab = self._tabs[active_idx]
                     self._active_tab_id = active_tab.tab_id
                     self.project = active_tab.project
                     self.project_path = active_tab.file_path
+                    self.engine = active_tab.engine
                     self.canvas.project = self.project
                     if active_tab.view_state is None and isinstance(vp, dict):
                         active_tab.view_state = dict(vp)
@@ -1112,6 +1235,7 @@ class AudioFlowMainWindow(QMainWindow):
             if isinstance(ui_state, dict):
                 self._restore_ui_state(ui_state)
             self.sync_graph_to_engine()
+            self._sync_run_button(self._is_engine_running(self.engine))
             for i in range(len(self._tabs)):
                 self._refresh_tab_title(i)
             self._sync_window_title()
@@ -1306,6 +1430,11 @@ class AudioFlowMainWindow(QMainWindow):
         self._cache_timer.stop()
         if self._cache_dirty:
             self.save_workspace_cache()
-        if self._owns_engine:
-            self.engine.close()
+        for tab in list(self._tabs):
+            if tab.owns_engine and tab.engine is not None:
+                try:
+                    tab.engine.close()
+                except Exception:
+                    pass
+                tab.engine = None
         super().closeEvent(event)
