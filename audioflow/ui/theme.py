@@ -174,6 +174,32 @@ QTabBar#WorkflowTabs {{
     background-color: transparent;
     border: none;
 }}
+QWidget#WorkflowTabs {{
+    background-color: transparent;
+    border: none;
+}}
+QFrame#WorkflowTabItem {{
+    background-color: transparent;
+    border: none;
+    border-right: 1px solid {COMFY_STROKE};
+}}
+QFrame#WorkflowTabItem:hover {{
+    background-color: {COMFY_SURFACE_CARD};
+}}
+QFrame#WorkflowTabItem[selected="true"] {{
+    background-color: {COMFY_SURFACE_ELEVATED};
+    border-bottom: 2px solid #D0D0D0;
+}}
+QLabel#WorkflowTabTitle {{
+    background-color: transparent;
+    color: {COMFY_TEXT_MUTED};
+    font-size: 12px;
+    font-weight: 400;
+}}
+QLabel#WorkflowTabTitle[selected="true"] {{
+    color: {COMFY_TEXT_PRIMARY};
+    font-weight: 600;
+}}
 QTabBar#WorkflowTabs::tab {{
     background-color: transparent;
     color: {COMFY_TEXT_MUTED};

@@ -32,6 +32,7 @@ from audioflow.models.graph_model import NodeType, ProjectModel
 from audioflow.ui.canvas import NodeCanvas
 from audioflow.ui.icons import ui_icon, workflow_tab_icon
 from audioflow.ui.panels import BottomTelemetryPanel, LeftPalettePanel
+from audioflow.ui.workflow_tabs import WorkflowTabBar
 from audioflow.ui.theme import (
     COMFY_STROKE,
     COMFY_TEXT_MUTED,
@@ -339,14 +340,9 @@ class AudioFlowMainWindow(QMainWindow):
         top_lay.addWidget(sep_left)
 
         # ComfyUI Workflow Tabs + '+' New Blank Workflow Button
-        self.workflow_tabs = QTabBar(self.top_bar)
+        self.workflow_tabs = WorkflowTabBar(self.top_bar)
         self.workflow_tabs.setObjectName("WorkflowTabs")
-        self.workflow_tabs.setTabsClosable(False)
-        self.workflow_tabs.setMovable(True)
-        self.workflow_tabs.setExpanding(False)
-        self.workflow_tabs.setDrawBase(False)
         self.workflow_tabs.setIconSize(QSize(14, 14))
-        self.workflow_tabs.setElideMode(Qt.TextElideMode.ElideRight)
         self._add_workflow_tab_item(self._tabs[0])
         self.workflow_tabs.currentChanged.connect(self._on_workflow_tab_changed)
         self.workflow_tabs.tabMoved.connect(self._on_workflow_tab_moved)
@@ -813,6 +809,7 @@ class AudioFlowMainWindow(QMainWindow):
         editor.returnPressed.connect(_commit)
         editor.editingFinished.connect(_commit)
         editor.show()
+        editor.raise_()
         editor.selectAll()
         editor.setFocus()
 

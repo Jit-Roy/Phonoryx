@@ -13,7 +13,7 @@ import pytest
 from PySide6.QtCore import QMimeData, QPoint, QPointF, Qt
 from PySide6.QtGui import QDropEvent, QWheelEvent
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox, QToolButton
+from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox, QTabBar, QToolButton
 
 from audioflow.engine_bridge import AudioFlowEngine, DataFlow, DeviceInfo, DeviceRoleHint, NodeType, ProcessInfo
 from audioflow.models.graph_model import NODE_SPECS, NodeModel, ProjectModel
@@ -1377,6 +1377,62 @@ def test_gap_reuse_naming_for_tabs_and_canvas_nodes(qapp, tmp_path: Path):
         assert canvas.project.nodes[2].node_type == NodeType.GAIN
     finally:
         win.close()
+
+
+def test_workflow_tab_drag_swap_moves_icon_and_buttons_atomically(qapp, tmp_path: Path):
+    """Dragging a workflow tab moves its icon, title, and close button as one unit without lag."""
+    win = AudioFlowMainWindow(
+        auto_start=False,
+        cache_path=tmp_path / "tab_drag_cache.json",
+        restore_cache=False,
+    )
+    try:
+        win.show()
+        win.btn_new_tab.click()
+        qapp.processEvents()
+
+        tb = win.workflow_tabs
+        assert [tb.tabText(i) for i in range(2)] == ["Untitled Workflow", "Untitled Workflow 2"]
+        plus_x_before = win.btn_new_tab.x()
+
+        p0 = tb.tabRect(0).center()
+        p1 = tb.tabRect(1).center()
+        QTest.mousePress(tb, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, p0)
+        for step in range(1, 6):
+            pt = QPoint(int(p0.x() + (p1.x() - p0.x()) * step / 5), p0.y())
+            QTest.mouseMove(tb, pt)
+            qapp.processEvents()
+            for item in tb._items:
+                cbtn = item.close_button()
+                assert cbtn is not None
+                # Icon stays locked at left padding and close button stays locked inside tab right edge
+                assert 0 <= item.lbl_icon.x() < 20
+                assert item.width() - 40 <= cbtn.x() <= item.width()
+            assert win.btn_new_tab.x() == plus_x_before
+
+        QTest.mouseRelease(tb, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, p1)
+        qapp.processEvents()
+
+        # Immediately upon drop: order swapped cleanly and buttons sit inside their own tab rects
+        assert [tb.tabText(i) for i in range(2)] == ["Untitled Workflow 2", "Untitled Workflow"]
+        assert [t.base_title() for t in win._tabs] == ["Untitled Workflow 2", "Untitled Workflow"]
+        assert tb.currentIndex() == 1
+        r0 = tb.tabRect(0)
+        r1 = tb.tabRect(1)
+        b0 = tb.tabButton(0, QTabBar.ButtonPosition.RightSide)
+        b1 = tb.tabButton(1, QTabBar.ButtonPosition.RightSide)
+        assert r0.contains(tb._items[0].mapTo(tb, b0.pos()))
+        assert r1.contains(tb._items[1].mapTo(tb, b1.pos()))
+        assert win.btn_new_tab.x() == plus_x_before
+
+        # Clicking close button on index 0 closes 'Untitled Workflow 2', leaving 'Untitled Workflow'
+        b0.click()
+        qapp.processEvents()
+        assert tb.count() == 1
+        assert tb.tabText(0) == "Untitled Workflow"
+    finally:
+        win.close()
+
 
 
 
