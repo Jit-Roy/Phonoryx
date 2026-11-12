@@ -48,19 +48,11 @@ NODE_SPECS: Dict[NodeType, NodeSpec] = {
     ),
     NodeType.MIC_INPUT: NodeSpec(
         NodeType.MIC_INPUT,
-        "Microphone Input",
+        "Physical Device Input",
         NodeCategory.SOURCE,
         (),
         ("Out",),
-        "Captures audio from a Windows microphone input device.",
-    ),
-    NodeType.LINE_INPUT: NodeSpec(
-        NodeType.LINE_INPUT,
-        "Physical Line Input",
-        NodeCategory.SOURCE,
-        (),
-        ("Out",),
-        "Captures audio from a physical Line-In / interface input.",
+        "Captures audio from a physical microphone, line-in, or hardware audio interface.",
     ),
     NodeType.VIRTUAL_INPUT: NodeSpec(
         NodeType.VIRTUAL_INPUT,
@@ -245,7 +237,11 @@ class NodeModel:
         while len(eq) < 5:
             eq.append(0.0)
         raw_type = int(raw["type"])
-        legacy_map = {202: int(NodeType.SPEAKER_OUTPUT), 204: int(NodeType.VIRTUAL_OUTPUT)}
+        legacy_map = {
+            4: int(NodeType.MIC_INPUT),
+            202: int(NodeType.SPEAKER_OUTPUT),
+            204: int(NodeType.VIRTUAL_OUTPUT),
+        }
         node_type = NodeType(legacy_map.get(raw_type, raw_type))
         return cls(
             id=int(raw["id"]),

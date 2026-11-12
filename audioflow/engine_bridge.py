@@ -30,7 +30,6 @@ class NodeType(IntEnum):
     APP_CAPTURE = 1
     SYSTEM_CAPTURE = 2
     MIC_INPUT = 3
-    LINE_INPUT = 4
     VIRTUAL_INPUT = 5
 
     # Audio Processing Nodes

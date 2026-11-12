@@ -153,19 +153,19 @@ def test_project_save_load_preserves_unavailable_device_without_fallback(tmp_pat
 
 
 def test_all_required_node_specs_present():
-    # 5 source + 9 processing + 3 output = 17 required node types
-    assert len(NODE_SPECS) == 17
+    # 4 source + 9 processing + 3 output = 16 required node types
+    assert len(NODE_SPECS) == 16
     for nt in NodeType:
         assert nt in NODE_SPECS
 
-    # Legacy output IDs (202 Headphone, 204 Virtual Mic) and removed meter (106) must migrate cleanly
+    # Legacy IDs (4 Line In, 202 Headphone, 204 Virtual Mic) and removed meter (106) migrate cleanly
     migrated = ProjectModel()
     migrated.load_project_dict(
         {
             "nodes": [
                 {"id": 1, "type": 202, "device_id": "d1"},
                 {"id": 2, "type": 204, "device_id": "d2"},
-                {"id": 3, "type": 1},
+                {"id": 3, "type": 4, "device_id": "m1"},
                 {"id": 4, "type": 106},
             ],
             "connections": [
@@ -176,6 +176,7 @@ def test_all_required_node_specs_present():
     )
     assert migrated.nodes[1].node_type == NodeType.SPEAKER_OUTPUT
     assert migrated.nodes[2].node_type == NodeType.VIRTUAL_OUTPUT
+    assert migrated.nodes[3].node_type == NodeType.MIC_INPUT
     assert 4 not in migrated.nodes
     assert len(migrated.connections) == 1
     assert (migrated.connections[0].src_node, migrated.connections[0].dst_node) == (3, 1)

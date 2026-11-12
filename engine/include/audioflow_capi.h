@@ -39,7 +39,6 @@ typedef enum af_node_type_t {
     AF_NODE_APP_CAPTURE = 1,
     AF_NODE_SYSTEM_CAPTURE = 2,
     AF_NODE_MIC_INPUT = 3,
-    AF_NODE_LINE_INPUT = 4,
     AF_NODE_VIRTUAL_INPUT = 5,
 
     /* Processing nodes */

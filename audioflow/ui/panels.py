@@ -406,7 +406,6 @@ class InspectorPanel(QWidget):
         needs_device = node.node_type in (
             NodeType.SYSTEM_CAPTURE,
             NodeType.MIC_INPUT,
-            NodeType.LINE_INPUT,
             NodeType.VIRTUAL_INPUT,
             NodeType.SPEAKER_OUTPUT,
             NodeType.VIRTUAL_OUTPUT,
@@ -468,7 +467,6 @@ class InspectorPanel(QWidget):
             NodeType.APP_CAPTURE,
             NodeType.SYSTEM_CAPTURE,
             NodeType.MIC_INPUT,
-            NodeType.LINE_INPUT,
             NodeType.VIRTUAL_INPUT,
             NodeType.VOLUME,
             NodeType.GAIN,
@@ -498,14 +496,13 @@ class InspectorPanel(QWidget):
     def _populate_device_combo(self, node: NodeModel) -> None:
         self.cmb_device.clear()
         self.cmb_device.addItem("<Unassigned>", ("", ""))
-        want_capture = node.node_type in (NodeType.MIC_INPUT, NodeType.LINE_INPUT, NodeType.VIRTUAL_INPUT)
+        want_capture = node.node_type in (NodeType.MIC_INPUT, NodeType.VIRTUAL_INPUT)
         is_virtual_node = node.node_type in (
             NodeType.VIRTUAL_INPUT,
             NodeType.VIRTUAL_OUTPUT,
         )
         is_physical_only = node.node_type in (
             NodeType.MIC_INPUT,
-            NodeType.LINE_INPUT,
             NodeType.SPEAKER_OUTPUT,
         )
         candidates = [

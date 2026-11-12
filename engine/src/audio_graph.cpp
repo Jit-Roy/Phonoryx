@@ -307,7 +307,7 @@ bool AudioEngine::apply_graph_json(const char* json_text, std::string& err_out) 
                     res.endpoint = std::make_shared<WasapiEndpointWorker>(
                         s.id, EndpointMode::SystemLoopback, s.device_id, 0, sample_rate_, &logs_);
                     res.endpoint->start();
-                } else if (s.type == AF_NODE_MIC_INPUT || s.type == AF_NODE_LINE_INPUT || s.type == AF_NODE_VIRTUAL_INPUT) {
+                } else if (s.type == AF_NODE_MIC_INPUT || s.type == AF_NODE_VIRTUAL_INPUT) {
                     if (!s.device_id.empty()) {
                         res.endpoint = std::make_shared<WasapiEndpointWorker>(
                             s.id, EndpointMode::InputCapture, s.device_id, 0, sample_rate_, &logs_);
