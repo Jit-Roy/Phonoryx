@@ -1,4 +1,4 @@
-"""Microsoft OneNote Fluent Dark theme palette and Qt stylesheet for AudioFlow Studio.
+"""Microsoft OneNote Fluent Dark theme palette and Qt stylesheet for Phonoryx Studio.
 
 Color tokens align with OneNote / Office Fluent dark surfaces (#141414, #1F1F1F,
 #242424, #292929), OneNote plum/purple brand accents (#7719AA, #80397B, #A071EE),
@@ -7,7 +7,7 @@ and the 16-section color palette extracted from OneNote's shipped resources.
 
 from __future__ import annotations
 
-from audioflow.engine_bridge import NodeType
+from phonoryx.engine_bridge import NodeType
 
 # OneNote Brand & Fluent Purple Accents
 ONENOTE_BRAND_PURPLE = "#7719AA"

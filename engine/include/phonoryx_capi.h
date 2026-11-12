@@ -3,9 +3,9 @@
 #include <stdint.h>
 
 #ifdef _WIN32
-  #if defined(AUDIOFLOW_STATIC_TEST)
+  #if defined(PHONORYX_STATIC_TEST)
     #define AF_API
-  #elif defined(AUDIOFLOW_EXPORTS)
+  #elif defined(PHONORYX_EXPORTS)
     #define AF_API __declspec(dllexport)
   #else
     #define AF_API __declspec(dllimport)

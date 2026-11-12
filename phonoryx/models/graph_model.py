@@ -1,4 +1,4 @@
-"""AudioFlow project, graph, and validation models."""
+"""Phonoryx project, graph, and validation models."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Set, Tuple
 
-from audioflow.engine_bridge import NodeType
+from phonoryx.engine_bridge import NodeType
 
 
 class NodeCategory(str, Enum):
@@ -538,7 +538,7 @@ class ProjectModel:
     def to_project_dict(self) -> dict:
         return {
             "version": 1,
-            "app": "AudioFlow",
+            "app": "Phonoryx",
             "nodes": [n.to_project_dict() for n in self.nodes.values()],
             "connections": [c.to_dict() for c in self.connections],
             "groups": [g.to_dict() for g in self.groups.values()],

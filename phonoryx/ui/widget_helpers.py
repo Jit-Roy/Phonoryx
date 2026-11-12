@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import List, Optional, Tuple
 
-from audioflow.engine_bridge import DataFlow, DeviceInfo, NodeType, ProcessInfo
-from audioflow.models.graph_model import NodeModel, ProjectModel
+from phonoryx.engine_bridge import DataFlow, DeviceInfo, NodeType, ProcessInfo
+from phonoryx.models.graph_model import NodeModel, ProjectModel
 
 VIRTUAL_DRIVER_MISSING_TEXT = (
     "No Windows virtual audio driver detected. Install the open-source MIT "

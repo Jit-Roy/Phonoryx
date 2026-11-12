@@ -53,7 +53,7 @@ bool AudioEngine::start() {
     if (running_.exchange(true, std::memory_order_acq_rel)) return true;
     ResetEvent(stop_event_);
     rt_thread_ = std::thread(&AudioEngine::rt_loop, this);
-    logs_.push(0, 0, "AudioFlow real-time engine started");
+    logs_.push(0, 0, "Phonoryx real-time engine started");
     return true;
 }
 
@@ -61,7 +61,7 @@ void AudioEngine::stop() {
     if (!running_.exchange(false, std::memory_order_acq_rel)) return;
     if (stop_event_) SetEvent(stop_event_);
     if (rt_thread_.joinable()) rt_thread_.join();
-    logs_.push(0, 0, "AudioFlow real-time engine stopped");
+    logs_.push(0, 0, "Phonoryx real-time engine stopped");
 }
 
 bool AudioEngine::parse_graph_json(

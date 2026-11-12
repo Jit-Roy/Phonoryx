@@ -1,4 +1,4 @@
-"""Left, Right, and Bottom dock panels for AudioFlow Studio."""
+"""Left, Right, and Bottom dock panels for Phonoryx Studio."""
 
 from __future__ import annotations
 
@@ -34,7 +34,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from audioflow.engine_bridge import (
+from phonoryx.engine_bridge import (
     DataFlow,
     DeviceInfo,
     EngineStats,
@@ -43,15 +43,15 @@ from audioflow.engine_bridge import (
     NodeType,
     ProcessInfo,
 )
-from audioflow.models.graph_model import (
+from phonoryx.models.graph_model import (
     NODE_SPECS,
     ConnectionModel,
     NodeCategory,
     NodeModel,
 )
-from audioflow.ui.canvas import NODE_DRAG_MIME_TYPE
-from audioflow.ui.icons import app_session_icon, device_icon, node_type_icon, ui_icon
-from audioflow.ui.widget_helpers import (
+from phonoryx.ui.canvas import NODE_DRAG_MIME_TYPE
+from phonoryx.ui.icons import app_session_icon, device_icon, node_type_icon, ui_icon
+from phonoryx.ui.widget_helpers import (
     build_device_combo_entries,
     build_process_combo_entries,
     matching_process_combo_index,

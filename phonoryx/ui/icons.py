@@ -1,4 +1,4 @@
-"""Colorful Microsoft OneNote-inspired vector icon system for AudioFlow Studio."""
+"""Colorful vector icon system for Phonoryx Studio."""
 
 from __future__ import annotations
 
@@ -18,8 +18,8 @@ from PySide6.QtGui import (
     QPolygonF,
 )
 
-from audioflow.engine_bridge import DataFlow, NodeType
-from audioflow.ui.theme import (
+from phonoryx.engine_bridge import DataFlow, NodeType
+from phonoryx.ui.theme import (
     NODE_ACCENT_COLORS,
     ONENOTE_BRAND_LAVENDER,
     ONENOTE_BRAND_PLUM,
@@ -52,38 +52,37 @@ def _render_icon(draw_fn: Callable[[QPainter, QRectF], None], size: int = 18) ->
 
 def _draw_app_brand(p: QPainter, r: QRectF) -> None:
     w, h = r.width(), r.height()
-    # OneNote-style purple spine + rounded notebook body
-    spine = QRectF(w * 0.10, h * 0.10, w * 0.28, h * 0.80)
-    page = QRectF(w * 0.24, h * 0.10, w * 0.66, h * 0.80)
+    # Phonoryx squircle dark emblem + amber bars + teal routing branches + white output nodes
     p.setPen(Qt.PenStyle.NoPen)
-    grad = QLinearGradient(page.topLeft(), page.bottomRight())
-    grad.setColorAt(0.0, QColor(ONENOTE_BRAND_VIOLET))
-    grad.setColorAt(1.0, QColor(ONENOTE_BRAND_PURPLE))
-    p.setBrush(grad)
-    p.drawRoundedRect(page, w * 0.14, w * 0.14)
+    p.setBrush(QColor("#1B1F27"))
+    p.drawRoundedRect(QRectF(0.0, 0.0, w, h), w * 0.21, h * 0.21)
 
-    # Colored right section strips (OneNote notebook binder tabs)
-    strip_h = h * 0.18
-    for idx, col in enumerate(("#0088F0", "#00C753", "#FFC114")):
-        p.setBrush(QColor(col))
-        p.drawRoundedRect(
-            QRectF(w * 0.78, h * (0.18 + idx * 0.22), w * 0.14, strip_h),
-            1.5,
-            1.5,
-        )
-
-    p.setBrush(QColor(ONENOTE_BRAND_PLUM))
-    p.drawRoundedRect(spine, w * 0.10, w * 0.10)
-
-    # Crisp white-cyan waveform inside the page
-    p.setPen(_pen("#FFFFFF", max(1.4, w * 0.08)))
-    for x_rel, y0_rel, y1_rel in (
-        (0.36, 0.42, 0.58),
-        (0.47, 0.28, 0.72),
-        (0.58, 0.35, 0.65),
-        (0.69, 0.44, 0.56),
+    p.setBrush(QColor("#FFB020"))
+    for x_r, y_r, w_r, h_r in (
+        (0.12, 0.44, 0.045, 0.12),
+        (0.19, 0.39, 0.045, 0.22),
+        (0.26, 0.425, 0.045, 0.15),
     ):
-        p.drawLine(QPointF(w * x_rel, h * y0_rel), QPointF(w * x_rel, h * y1_rel))
+        p.drawRoundedRect(QRectF(w * x_r, h * y_r, w * w_r, h * h_r), w * 0.022, w * 0.022)
+
+    pen = _pen("#2DD4BF", max(1.2, w * 0.032))
+    p.setPen(pen)
+    p.setBrush(Qt.BrushStyle.NoBrush)
+    hub = QPointF(w * 0.35, h * 0.50)
+    p.drawLine(hub, QPointF(w * 0.76, h * 0.50))
+    for end_y in (0.25, 0.75):
+        branch = QPainterPath(hub)
+        branch.cubicTo(
+            QPointF(w * 0.49, h * 0.50),
+            QPointF(w * 0.53, h * end_y),
+            QPointF(w * 0.76, h * end_y),
+        )
+        p.drawPath(branch)
+
+    p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(QColor("#F4F6FA"))
+    for y_r in (0.20, 0.45, 0.70):
+        p.drawRoundedRect(QRectF(w * 0.75, h * y_r, w * 0.11, h * 0.10), w * 0.02, w * 0.02)
 
 
 def _draw_section_tab(p: QPainter, r: QRectF, color_hex: str, running: bool = False) -> None:

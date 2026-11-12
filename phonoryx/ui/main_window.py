@@ -1,15 +1,17 @@
-"""Main Studio Window for AudioFlow — ComfyUI-faithful layout, workflow tabs & terminal."""
+"""Main Studio Window for Phonoryx — ComfyUI-faithful layout, workflow tabs & terminal."""
 
 from __future__ import annotations
 
 import json
+import os
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from PySide6.QtCore import QEvent, QSize, Qt, QTimer
-from PySide6.QtGui import QAction, QKeySequence
+from PySide6.QtGui import QAction, QIcon, QKeySequence
 from shiboken6 import isValid
 from PySide6.QtWidgets import (
     QApplication,
@@ -28,14 +30,15 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from audioflow.engine_bridge import AudioFlowEngine, DeviceInfo, ProcessInfo
-from audioflow.models.graph_model import NodeType, ProjectModel
-from audioflow.ui.canvas import NodeCanvas
-from audioflow.ui.icons import ui_icon, workflow_tab_icon
-from audioflow.ui.panels import BottomTelemetryPanel, LeftPalettePanel
-from audioflow.ui.widget_helpers import resolve_project_process_bindings
-from audioflow.ui.workflow_tabs import WorkflowTabBar
-from audioflow.ui.theme import (
+from phonoryx import get_base_dir
+from phonoryx.engine_bridge import DeviceInfo, PhonoryxEngine, ProcessInfo
+from phonoryx.models.graph_model import NodeType, ProjectModel
+from phonoryx.ui.canvas import NodeCanvas
+from phonoryx.ui.icons import ui_icon, workflow_tab_icon
+from phonoryx.ui.panels import BottomTelemetryPanel, LeftPalettePanel
+from phonoryx.ui.widget_helpers import resolve_project_process_bindings
+from phonoryx.ui.workflow_tabs import WorkflowTabBar
+from phonoryx.ui.theme import (
     COMFY_STROKE,
     COMFY_TEXT_MUTED,
     COMFY_TEXT_SECONDARY,
@@ -43,7 +46,35 @@ from audioflow.ui.theme import (
     STUDIO_STYLESHEET,
 )
 
-DEFAULT_CACHE_PATH = Path.home() / ".audioflow" / "workspace_cache.json"
+if sys.platform == "win32":
+    import ctypes
+    from ctypes import wintypes
+
+    _user32 = ctypes.windll.user32
+    _WM_SETICON = 0x0080
+    _ICON_SMALL = 0
+    _ICON_BIG = 1
+    _IMAGE_ICON = 1
+    _LR_LOADFROMFILE = 0x00000010
+
+
+def get_default_cache_dir() -> Path:
+    """Return Windows Local AppData directory (%LOCALAPPDATA%\\Phonoryx), matching PyCam."""
+    base = (
+        os.environ.get("LOCALAPPDATA")
+        or os.environ.get("APPDATA")
+        or str(Path.home())
+    )
+    target_dir = Path(base) / "Phonoryx"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    return target_dir
+
+
+def get_default_cache_path() -> Path:
+    return get_default_cache_dir() / "workspace_cache.json"
+
+
+DEFAULT_CACHE_PATH = get_default_cache_path()
 
 
 @dataclass
@@ -95,20 +126,25 @@ class _TabRenameLineEdit(QLineEdit):
             self.commit_fn()
 
 
-class AudioFlowMainWindow(QMainWindow):
+class PhonoryxMainWindow(QMainWindow):
     """Studio main window with ComfyUI workflow tabs, inline node canvas, and closable terminal."""
 
     def __init__(
         self,
-        engine: Optional[AudioFlowEngine] = None,
+        engine: Optional[PhonoryxEngine] = None,
         auto_start: bool = True,
         cache_path: Optional[Path] = None,
         restore_cache: bool = True,
         engine_factory: Optional[Callable[[], Any]] = None,
     ) -> None:
         super().__init__()
-        self.setWindowTitle("Untitled Workflow — AudioFlow Studio")
-        self.setWindowIcon(ui_icon("app_brand", 32))
+        self.setWindowTitle("Untitled Workflow — Phonoryx Studio")
+        ico_path = os.path.join(get_base_dir(), "assets", "icons", "app_icon.ico")
+        if os.path.exists(ico_path):
+            self.setWindowIcon(QIcon(ico_path))
+        else:
+            self.setWindowIcon(ui_icon("app_brand", 32))
+        self._apply_win32_taskbar_icon()
         self.setMinimumSize(780, 500)
         self.resize(1380, 820)
         screen = QApplication.primaryScreen()
@@ -123,7 +159,11 @@ class AudioFlowMainWindow(QMainWindow):
         initial_engine = engine if engine is not None else self._create_tab_engine()
         self.engine = initial_engine
         self._owns_engine = engine is None
-        self.cache_path = cache_path if cache_path is not None else DEFAULT_CACHE_PATH
+        self.cache_path = (
+            cache_path
+            if cache_path is not None
+            else get_default_cache_path()
+        )
         self._persist_cache = bool(restore_cache or cache_path is not None)
         self._cache_dirty = False
         self._restoring_cache = False
@@ -669,7 +709,7 @@ class AudioFlowMainWindow(QMainWindow):
     def _create_tab_engine(self) -> Any:
         if self._engine_factory is not None:
             return self._engine_factory()
-        return AudioFlowEngine(sample_rate=48000, block_frames=256)
+        return PhonoryxEngine(sample_rate=48000, block_frames=256)
 
     @staticmethod
     def _is_engine_running(engine: Any) -> bool:
@@ -716,7 +756,7 @@ class AudioFlowMainWindow(QMainWindow):
 
     def _sync_window_title(self) -> None:
         tab = self._active_tab()
-        self.setWindowTitle(f"{tab.display_title()} — AudioFlow Studio")
+        self.setWindowTitle(f"{tab.display_title()} — Phonoryx Studio")
 
     def _on_canvas_workspace_modified(self) -> None:
         if not self._switching_tabs and not self._restoring_cache:
@@ -1395,9 +1435,9 @@ class AudioFlowMainWindow(QMainWindow):
         default_name = f"{self._active_tab().base_title()}.json"
         path, selected_filter = QFileDialog.getSaveFileName(
             self,
-            "Save AudioFlow Workflow",
+            "Save Phonoryx Workflow",
             default_name,
-            "AudioFlow Workflow (*.json);;Legacy AudioFlow (*.aflow)",
+            "Phonoryx Workflow (*.json);;Phonoryx Legacy (*.aflow)",
         )
         if not path:
             return
@@ -1408,9 +1448,9 @@ class AudioFlowMainWindow(QMainWindow):
     def open_project_dialog(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
             self,
-            "Open AudioFlow Workflow",
+            "Open Phonoryx Workflow",
             "",
-            "AudioFlow Workflows (*.json *.aflow);;JSON Files (*.json);;Legacy AudioFlow (*.aflow)",
+            "Phonoryx Workflows (*.json *.aflow);;JSON Files (*.json);;Phonoryx Legacy (*.aflow)",
         )
         if path:
             self.load_project_path(Path(path))
@@ -1484,8 +1524,55 @@ class AudioFlowMainWindow(QMainWindow):
                 self._on_ui_state_changed()
         return super().eventFilter(obj, event)
 
+    def _apply_win32_taskbar_icon(self) -> None:
+        """Bind native Win32 HICONs on the window HWND so the Windows Taskbar displays the logo cleanly."""
+        if sys.platform != "win32":
+            return
+        try:
+            ico_path = os.path.join(get_base_dir(), "assets", "icons", "app_icon.ico")
+            if not os.path.exists(ico_path):
+                return
+
+            hwnd = int(self.winId())
+            _user32.LoadImageW.restype = wintypes.HANDLE
+            _user32.LoadImageW.argtypes = [
+                wintypes.HINSTANCE,
+                wintypes.LPCWSTR,
+                wintypes.UINT,
+                ctypes.c_int,
+                ctypes.c_int,
+                wintypes.UINT,
+            ]
+            _user32.SendMessageW.argtypes = [
+                wintypes.HWND,
+                wintypes.UINT,
+                wintypes.WPARAM,
+                wintypes.LPARAM,
+            ]
+            _user32.SendMessageW.restype = wintypes.LPARAM
+
+            hicon_big = _user32.LoadImageW(None, ico_path, _IMAGE_ICON, 0, 0, _LR_LOADFROMFILE)
+            hicon_small = _user32.LoadImageW(None, ico_path, _IMAGE_ICON, 16, 16, _LR_LOADFROMFILE)
+
+            SetClassLongPtr = getattr(_user32, "SetClassLongPtrW", getattr(_user32, "SetClassLongW", None))
+            if SetClassLongPtr:
+                SetClassLongPtr.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_void_p]
+                SetClassLongPtr.restype = ctypes.c_void_p
+                if hicon_big:
+                    SetClassLongPtr(hwnd, -14, hicon_big)
+                if hicon_small:
+                    SetClassLongPtr(hwnd, -34, hicon_small)
+
+            if hicon_big:
+                _user32.SendMessageW(hwnd, _WM_SETICON, _ICON_BIG, hicon_big)
+            if hicon_small:
+                _user32.SendMessageW(hwnd, _WM_SETICON, _ICON_SMALL, hicon_small)
+        except Exception:
+            pass
+
     def showEvent(self, event) -> None:  # noqa: N802
         super().showEvent(event)
+        self._apply_win32_taskbar_icon()
         if not self._shown_once:
             self._shown_once = True
             self._apply_pending_ui_restore(include_maximized=True)

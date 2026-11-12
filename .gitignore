@@ -11,6 +11,7 @@ __pycache__/
 build/
 out/
 *.dll
+!assets/bin/phonoryx_engine.dll
 *.exe
 *.lib
 *.exp
@@ -22,9 +23,9 @@ out/
 *.lastbuildstate
 
 # Local Runtime / Editor Logs & Artifacts
-.audioflow_err.txt
+.phonoryx_err.txt
 .vscode/
 .vs/
 *.user
-*.aflow
+*.phonoryx
 

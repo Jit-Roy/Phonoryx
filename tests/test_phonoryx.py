@@ -1,4 +1,4 @@
-"""Comprehensive integration tests for AudioFlow Python bridge, models, persistence, and PySide6 studio."""
+"""Comprehensive integration tests for Phonoryx Python bridge, models, persistence, and PySide6 studio."""
 
 from __future__ import annotations
 
@@ -15,12 +15,12 @@ from PySide6.QtGui import QDropEvent, QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox, QTabBar, QToolButton
 
-from audioflow.engine_bridge import AudioFlowEngine, DataFlow, DeviceInfo, DeviceRoleHint, NodeType, ProcessInfo
-from audioflow.models.graph_model import NODE_SPECS, NodeModel, ProjectModel
-from audioflow.ui.canvas import HEADER_HEIGHT, NODE_DRAG_MIME_TYPE, NODE_WIDTH
-from audioflow.ui.main_window import AudioFlowMainWindow
-from audioflow.ui.panels import DraggablePaletteList, InspectorPanel
-from audioflow.ui.widget_helpers import (
+from phonoryx.engine_bridge import DataFlow, DeviceInfo, DeviceRoleHint, NodeType, PhonoryxEngine, ProcessInfo, find_engine_dll
+from phonoryx.models.graph_model import NODE_SPECS, NodeModel, ProjectModel
+from phonoryx.ui.canvas import HEADER_HEIGHT, NODE_DRAG_MIME_TYPE, NODE_WIDTH
+from phonoryx.ui.main_window import PhonoryxMainWindow, get_default_cache_path
+from phonoryx.ui.panels import DraggablePaletteList, InspectorPanel
+from phonoryx.ui.widget_helpers import (
     build_process_combo_entries,
     matching_process_combo_index,
     resolve_project_process_bindings,
@@ -37,7 +37,7 @@ def qapp():
 
 
 def test_native_engine_discovery_and_lifecycle():
-    with AudioFlowEngine(sample_rate=48000, block_frames=256) as eng:
+    with PhonoryxEngine(sample_rate=48000, block_frames=256) as eng:
         devices = eng.enumerate_devices()
         assert len(devices) > 0, "Expected real Windows MMDevices"
         assert any(d.flow in (DataFlow.RENDER, DataFlow.CAPTURE) for d in devices)
@@ -92,7 +92,7 @@ def test_section5_multi_branch_graph_sync_and_cycle_rejection():
     ok, msg = proj.add_connection(splitter.id, 3, chrome.id, 0)
     assert not ok
 
-    with AudioFlowEngine(48000, 128) as eng:
+    with PhonoryxEngine(48000, 128) as eng:
         assert eng.start()
         ok, err = eng.apply_graph(proj.to_engine_payload())
         assert ok, f"Engine rejected valid multi-branch graph: {err}"
@@ -191,7 +191,7 @@ def test_all_required_node_specs_present():
 def test_pyqt_main_window_canvas_undo_grouping_and_persistence(qapp, tmp_path: Path, monkeypatch):
     monkeypatch.setattr(QMessageBox, "warning", lambda *args, **kwargs: QMessageBox.StandardButton.Ok)
 
-    win = AudioFlowMainWindow(
+    win = PhonoryxMainWindow(
         auto_start=True,
         cache_path=tmp_path / "main_window_test_cache.json",
         restore_cache=False,
@@ -274,7 +274,7 @@ def _drag_canvas(canvas, start_scene: QPointF, end_scene: QPointF) -> None:
 
 
 def test_comfyui_wire_detach_move_replace_and_fanout(qapp, tmp_path: Path):
-    win = AudioFlowMainWindow(
+    win = PhonoryxMainWindow(
         auto_start=False,
         cache_path=tmp_path / "wire_cache.json",
         restore_cache=False,
@@ -333,7 +333,7 @@ def test_comfyui_wire_detach_move_replace_and_fanout(qapp, tmp_path: Path):
 
 
 def test_sidebar_drag_drop_creates_node_at_cursor(qapp, tmp_path: Path):
-    win = AudioFlowMainWindow(
+    win = PhonoryxMainWindow(
         auto_start=False,
         cache_path=tmp_path / "dnd_cache.json",
         restore_cache=False,
@@ -381,7 +381,7 @@ def test_sidebar_drag_drop_creates_node_at_cursor(qapp, tmp_path: Path):
 def test_workspace_cache_persists_across_restarts(qapp, tmp_path: Path):
     cache_file = tmp_path / "nested" / "workspace_cache.json"
 
-    win1 = AudioFlowMainWindow(auto_start=False, cache_path=cache_file, restore_cache=True)
+    win1 = PhonoryxMainWindow(auto_start=False, cache_path=cache_file, restore_cache=True)
     win1.show()
     qapp.processEvents()
     try:
@@ -406,7 +406,7 @@ def test_workspace_cache_persists_across_restarts(qapp, tmp_path: Path):
 
     assert cache_file.is_file()
 
-    win2 = AudioFlowMainWindow(auto_start=False, cache_path=cache_file, restore_cache=True)
+    win2 = PhonoryxMainWindow(auto_start=False, cache_path=cache_file, restore_cache=True)
     win2.show()
     qapp.processEvents()
     try:
@@ -433,14 +433,14 @@ def test_workspace_cache_persists_across_restarts(qapp, tmp_path: Path):
 
     # Opening with restore_cache=False must not wipe an existing cache file on close
     before_bytes = cache_file.read_text(encoding="utf-8")
-    win3 = AudioFlowMainWindow(auto_start=False, cache_path=cache_file, restore_cache=False)
+    win3 = PhonoryxMainWindow(auto_start=False, cache_path=cache_file, restore_cache=False)
     win3.show()
     qapp.processEvents()
     win3.close()
     assert cache_file.read_text(encoding="utf-8") == before_bytes
 
     # Panning & zooming alone on reopen persists new camera without marking clean workflow dirty
-    win4 = AudioFlowMainWindow(auto_start=False, cache_path=cache_file, restore_cache=True)
+    win4 = PhonoryxMainWindow(auto_start=False, cache_path=cache_file, restore_cache=True)
     win4.show()
     qapp.processEvents()
     try:
@@ -457,7 +457,7 @@ def test_workspace_cache_persists_across_restarts(qapp, tmp_path: Path):
     finally:
         win4.close()
 
-    win5 = AudioFlowMainWindow(auto_start=False, cache_path=cache_file, restore_cache=True)
+    win5 = PhonoryxMainWindow(auto_start=False, cache_path=cache_file, restore_cache=True)
     win5.show()
     qapp.processEvents()
     try:
@@ -479,7 +479,7 @@ def test_ui_layout_window_docks_tabs_and_terminal_cache(qapp, tmp_path: Path):
     target_x = avail.left() + 5
     target_y = avail.top() + 15
 
-    win1 = AudioFlowMainWindow(auto_start=False, cache_path=cache_file, restore_cache=True)
+    win1 = PhonoryxMainWindow(auto_start=False, cache_path=cache_file, restore_cache=True)
     win1.show()
     qapp.processEvents()
     try:
@@ -499,7 +499,7 @@ def test_ui_layout_window_docks_tabs_and_terminal_cache(qapp, tmp_path: Path):
         win1.close()
 
     # Session 2: reopened app restores geometry, palette tab=Devices, logs tab, closed terminal + height
-    win2 = AudioFlowMainWindow(auto_start=False, cache_path=cache_file, restore_cache=True)
+    win2 = PhonoryxMainWindow(auto_start=False, cache_path=cache_file, restore_cache=True)
     win2.show()
     qapp.processEvents()
     try:
@@ -527,7 +527,7 @@ def test_ui_layout_window_docks_tabs_and_terminal_cache(qapp, tmp_path: Path):
     finally:
         win2.close()
 
-    win3 = AudioFlowMainWindow(auto_start=False, cache_path=cache_file, restore_cache=True)
+    win3 = PhonoryxMainWindow(auto_start=False, cache_path=cache_file, restore_cache=True)
     win3.show()
     qapp.processEvents()
     try:
@@ -588,7 +588,7 @@ def test_virtual_driver_option2_inspector_and_device_prioritization(qapp):
     vmic_out = NodeModel(id=1, node_type=NodeType.VIRTUAL_OUTPUT)
     panel.set_node(vmic_out)
     combo_ids = [panel.cmb_device.itemData(i)[0] for i in range(panel.cmb_device.count())]
-    assert not any(cid.startswith("audioflow://") for cid in combo_ids)
+    assert not any(cid.startswith("phonoryx://") for cid in combo_ids)
     assert combo_ids == ["", "vad-spk"]
     assert panel.lbl_missing_warn.isHidden()
 
@@ -616,7 +616,7 @@ def test_virtual_driver_option2_inspector_and_device_prioritization(qapp):
 
 
 def test_comfyui_left_drag_pan_and_hidden_scrollbars(qapp, tmp_path: Path):
-    win = AudioFlowMainWindow(
+    win = PhonoryxMainWindow(
         auto_start=False,
         cache_path=tmp_path / "pan_cache.json",
         restore_cache=False,
@@ -657,7 +657,7 @@ def test_comfyui_left_drag_pan_and_hidden_scrollbars(qapp, tmp_path: Path):
 
 
 def test_comfyui_inline_node_widgets_selection_tabs_and_terminal(qapp, tmp_path: Path):
-    win = AudioFlowMainWindow(
+    win = PhonoryxMainWindow(
         auto_start=False,
         cache_path=tmp_path / "comfyui_cache.json",
         restore_cache=False,
@@ -903,7 +903,7 @@ def test_refresh_button_and_comfyui_node_resize(tmp_path):
     qapp = QApplication.instance() or QApplication([])
     cache_path = tmp_path / "workspace_cache.json"
 
-    win = AudioFlowMainWindow(cache_path=cache_path, restore_cache=False, auto_start=False)
+    win = PhonoryxMainWindow(cache_path=cache_path, restore_cache=False, auto_start=False)
     try:
         win.resize(1200, 760)
         win.show()
@@ -1000,7 +1000,7 @@ def test_refresh_button_and_comfyui_node_resize(tmp_path):
     finally:
         win.close()
 
-    win2 = AudioFlowMainWindow(cache_path=cache_path, restore_cache=True, auto_start=False)
+    win2 = PhonoryxMainWindow(cache_path=cache_path, restore_cache=True, auto_start=False)
     try:
         win2.show()
         qapp.processEvents()
@@ -1026,12 +1026,12 @@ def test_save_location_and_node_resize_persist_across_restarts(qapp, monkeypatch
     def _fake_save_dialog(*args, **kwargs):
         dialog_calls.append(args)
         # Return extensionless name to verify ComfyUI-style automatic .json extension
-        return str(project_stem), "AudioFlow Workflow (*.json)"
+        return str(project_stem), "Phonoryx Workflow (*.json)"
 
     monkeypatch.setattr(QFileDialog, "getSaveFileName", _fake_save_dialog)
 
     # Session 1: resize a node via mouse drag, Ctrl+S once (prompts), edit & Ctrl+S again (no prompt), close
-    win1 = AudioFlowMainWindow(cache_path=cache_path, restore_cache=True, auto_start=False)
+    win1 = PhonoryxMainWindow(cache_path=cache_path, restore_cache=True, auto_start=False)
     try:
         win1.resize(1200, 760)
         win1.show()
@@ -1083,7 +1083,7 @@ def test_save_location_and_node_resize_persist_across_restarts(qapp, monkeypatch
         win1.close()
 
     # Session 2: reopen app -> remembered file path, clean title, resized node size, and tab 2 resize all persist!
-    win2 = AudioFlowMainWindow(cache_path=cache_path, restore_cache=True, auto_start=False)
+    win2 = PhonoryxMainWindow(cache_path=cache_path, restore_cache=True, auto_start=False)
     try:
         win2.show()
         qapp.processEvents()
@@ -1185,7 +1185,7 @@ def test_per_tab_run_stop_runs_multiple_tabs_simultaneously(qapp, tmp_path: Path
             return {}
 
         def get_engine_stats(self):
-            from audioflow.engine_bridge import EngineStats
+            from phonoryx.engine_bridge import EngineStats
             return EngineStats(
                 running=self.running,
                 sample_rate=48000,
@@ -1202,7 +1202,7 @@ def test_per_tab_run_stop_runs_multiple_tabs_simultaneously(qapp, tmp_path: Path
         def poll_logs(self):
             return []
 
-    win = AudioFlowMainWindow(
+    win = PhonoryxMainWindow(
         auto_start=False,
         cache_path=tmp_path / "multi_run_cache.json",
         restore_cache=False,
@@ -1276,8 +1276,8 @@ def test_per_tab_run_stop_runs_multiple_tabs_simultaneously(qapp, tmp_path: Path
 
 
 def test_real_native_engines_run_concurrently_across_tabs(qapp, tmp_path: Path):
-    """Two tabs backed by real C++ AudioFlowEngine instances run and stop independently."""
-    win = AudioFlowMainWindow(
+    """Two tabs backed by real C++ PhonoryxEngine instances run and stop independently."""
+    win = PhonoryxMainWindow(
         auto_start=True,
         cache_path=tmp_path / "native_multi_tab_cache.json",
         restore_cache=False,
@@ -1286,13 +1286,13 @@ def test_real_native_engines_run_concurrently_across_tabs(qapp, tmp_path: Path):
         win.show()
         qapp.processEvents()
         eng0 = win._tabs[0].engine
-        assert isinstance(eng0, AudioFlowEngine)
+        assert isinstance(eng0, PhonoryxEngine)
         assert eng0.is_running is True
 
         win.btn_new_tab.click()
         qapp.processEvents()
         eng1 = win._tabs[1].engine
-        assert isinstance(eng1, AudioFlowEngine)
+        assert isinstance(eng1, PhonoryxEngine)
         assert eng1 is not eng0
         assert eng0.is_running is True
         assert eng1.is_running is False
@@ -1316,7 +1316,7 @@ def test_real_native_engines_run_concurrently_across_tabs(qapp, tmp_path: Path):
 
 def test_gap_reuse_naming_for_tabs_and_canvas_nodes(qapp, tmp_path: Path):
     """Deleting a middle workflow tab or canvas node reuses the freed number on next creation."""
-    win = AudioFlowMainWindow(
+    win = PhonoryxMainWindow(
         auto_start=False,
         cache_path=tmp_path / "gap_reuse_cache.json",
         restore_cache=False,
@@ -1387,7 +1387,7 @@ def test_gap_reuse_naming_for_tabs_and_canvas_nodes(qapp, tmp_path: Path):
 
 def test_workflow_tab_drag_swap_moves_icon_and_buttons_atomically(qapp, tmp_path: Path):
     """Dragging a workflow tab moves its icon, title, and close button as one unit without lag."""
-    win = AudioFlowMainWindow(
+    win = PhonoryxMainWindow(
         auto_start=False,
         cache_path=tmp_path / "tab_drag_cache.json",
         restore_cache=False,
@@ -1499,7 +1499,7 @@ def test_app_capture_root_process_selection_and_waiting_combo(qapp):
 
 def test_app_capture_auto_reconnect_on_load_poll_and_running_engine(qapp, tmp_path: Path):
     """Saved APP_CAPTURE workflows and running tabs auto-relatch onto restarted app PIDs cleanly."""
-    from audioflow.engine_bridge import EngineStats
+    from phonoryx.engine_bridge import EngineStats
 
     live_procs = [
         _proc(pid=5001, parent_pid=100, exe_name="chrome.exe", window_title="Chrome", has_audio_session=True),
@@ -1569,7 +1569,7 @@ def test_app_capture_auto_reconnect_on_load_poll_and_running_engine(qapp, tmp_pa
     workflow_json = tmp_path / "chrome_capture.json"
     workflow_json.write_text(json.dumps(saved_proj.to_project_dict()), encoding="utf-8")
 
-    win = AudioFlowMainWindow(
+    win = PhonoryxMainWindow(
         auto_start=False,
         cache_path=tmp_path / "app_capture_cache.json",
         restore_cache=False,
@@ -1618,6 +1618,31 @@ def test_app_capture_auto_reconnect_on_load_poll_and_running_engine(qapp, tmp_pa
         assert "PID 8800" in node_item.cmb_process.currentText()
         assert not win._active_tab().dirty
         assert eng.applied_graphs[-1]["nodes"][0]["pid"] == 8800
+    finally:
+        win.close()
+
+
+def test_phonoryx_branding_bundled_dll_and_localappdata_cache(qapp, monkeypatch, tmp_path: Path):
+    """Phonoryx resolves bundled engine DLL without CMake, sets window icon, and uses %LOCALAPPDATA%\\Phonoryx."""
+    dll_path = find_engine_dll()
+    assert dll_path.is_file()
+    assert dll_path.name == "phonoryx_engine.dll"
+
+    local_app = tmp_path / "LocalAppData"
+    monkeypatch.setenv("LOCALAPPDATA", str(local_app))
+
+    resolved = get_default_cache_path()
+    assert resolved == local_app / "Phonoryx" / "workspace_cache.json"
+    assert resolved.parent.is_dir()
+
+    win = PhonoryxMainWindow(
+        auto_start=False,
+        cache_path=tmp_path / "brand_cache.json",
+        restore_cache=False,
+    )
+    try:
+        assert "Phonoryx Studio" in win.windowTitle()
+        assert not win.windowIcon().isNull()
     finally:
         win.close()
 

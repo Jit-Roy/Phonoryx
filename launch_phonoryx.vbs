@@ -8,7 +8,7 @@ If Not fso.FileExists(pyw) Then
     pyw = "pythonw.exe"
 End If
 
-cmd = """" & pyw & """ -m audioflow"
+cmd = """" & pyw & """ -m phonoryx"
 For i = 0 To WScript.Arguments.Count - 1
     cmd = cmd & " """ & WScript.Arguments(i) & """"
 Next

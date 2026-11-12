@@ -1,10 +1,11 @@
-"""ctypes C ABI bridge to the native C++20 AudioFlow real-time audio engine."""
+"""ctypes C ABI bridge to the native C++20 Phonoryx real-time audio engine."""
 
 from __future__ import annotations
 
 import ctypes
 import json
 import os
+import sys
 from dataclasses import dataclass
 from enum import IntEnum
 from pathlib import Path
@@ -171,24 +172,41 @@ class LogEntry:
 
 
 def find_engine_dll() -> Path:
-    env_path = os.environ.get("AUDIOFLOW_ENGINE_DLL")
+    env_path = os.environ.get("PHONORYX_ENGINE_DLL")
     if env_path:
         p = Path(env_path)
         if p.is_file():
             return p
 
+    candidates: List[Path] = []
+    if getattr(sys, "frozen", False):
+        meipass = getattr(sys, "_MEIPASS", None)
+        exe_dir = Path(sys.executable).resolve().parent
+        if meipass:
+            mp = Path(meipass)
+            candidates.extend([
+                mp / "phonoryx_engine.dll",
+                mp / "assets" / "bin" / "phonoryx_engine.dll",
+            ])
+        candidates.extend([
+            exe_dir / "phonoryx_engine.dll",
+            exe_dir / "assets" / "bin" / "phonoryx_engine.dll",
+        ])
+
     root = Path(__file__).resolve().parent.parent
-    candidates = [
-        root / "build" / "engine" / "bin" / "Release" / "audioflow_engine.dll",
-        root / "build" / "engine" / "bin" / "Debug" / "audioflow_engine.dll",
-        root / "build" / "engine" / "bin" / "audioflow_engine.dll",
-        Path(__file__).resolve().parent / "audioflow_engine.dll",
-    ]
+    candidates.extend([
+        root / "build" / "engine" / "bin" / "Release" / "phonoryx_engine.dll",
+        root / "build" / "engine" / "bin" / "Debug" / "phonoryx_engine.dll",
+        root / "build" / "engine" / "bin" / "phonoryx_engine.dll",
+        root / "assets" / "bin" / "phonoryx_engine.dll",
+        Path(__file__).resolve().parent / "phonoryx_engine.dll",
+    ])
     for c in candidates:
         if c.is_file():
             return c
     raise FileNotFoundError(
-        "Could not find audioflow_engine.dll. Build engine/ with CMake first "
+        "Could not find phonoryx_engine.dll. Ensure assets/bin/phonoryx_engine.dll is present "
+        "or build engine/ with CMake first "
         f"(checked: {', '.join(str(x) for x in candidates)})"
     )
 
@@ -197,7 +215,7 @@ def _decode_cstr(raw: bytes) -> str:
     return raw.decode("utf-8", errors="replace").rstrip("\x00")
 
 
-class AudioFlowEngine:
+class PhonoryxEngine:
     """Thread-safe high-level wrapper over the native C++ audio engine DLL."""
 
     def __init__(
@@ -298,7 +316,7 @@ class AudioFlowEngine:
             self._lib.af_engine_destroy(self._handle)
             self._handle = None
 
-    def __enter__(self) -> "AudioFlowEngine":
+    def __enter__(self) -> "PhonoryxEngine":
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:

@@ -43,16 +43,16 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from audioflow.engine_bridge import DeviceInfo, NodeMeter, NodeType, ProcessInfo
-from audioflow.models.graph_model import (
+from phonoryx.engine_bridge import DeviceInfo, NodeMeter, NodeType, ProcessInfo
+from phonoryx.models.graph_model import (
     ConnectionModel,
     GroupModel,
     NodeCategory,
     NodeModel,
     ProjectModel,
 )
-from audioflow.ui.icons import draw_node_type_icon
-from audioflow.ui.theme import (
+from phonoryx.ui.icons import draw_node_type_icon
+from phonoryx.ui.theme import (
     CANVAS_BG,
     CANVAS_GRID_MAJOR,
     CANVAS_GRID_MINOR,
@@ -72,7 +72,7 @@ from audioflow.ui.theme import (
     WIRE_IDLE_COLOR,
     WIRE_SELECTED_COLOR,
 )
-from audioflow.ui.widget_helpers import (
+from phonoryx.ui.widget_helpers import (
     EQ_BAND_LABELS,
     build_device_combo_entries,
     build_process_combo_entries,
@@ -91,7 +91,7 @@ HEADER_HEIGHT = 28.0
 PORT_ROW_HEIGHT = 20.0
 FOOTER_HEIGHT = 18.0
 PORT_RADIUS = 6.0
-NODE_DRAG_MIME_TYPE = "application/x-audioflow-node"
+NODE_DRAG_MIME_TYPE = "application/x-phonoryx-node"
 
 _RESIZE_CURSORS = {
     "NW": Qt.CursorShape.SizeFDiagCursor,
@@ -597,7 +597,7 @@ class NodeItem(QGraphicsObject):
         path, _ = QFileDialog.getSaveFileName(
             self.canvas,
             "Select Output WAV Recording Path",
-            self.model.file_path or "audioflow_recording.wav",
+            self.model.file_path or "phonoryx_recording.wav",
             "WAV Files (*.wav)",
         )
         if path and self.edit_file is not None:
@@ -2007,7 +2007,7 @@ class NodeCanvas(QGraphicsView):
         proc_menu = menu.addMenu("Add Processing Node")
         out_menu = menu.addMenu("Add Output Node")
         actions = {}
-        from audioflow.models.graph_model import NODE_SPECS
+        from phonoryx.models.graph_model import NODE_SPECS
 
         for nt, spec in NODE_SPECS.items():
             target_menu = (

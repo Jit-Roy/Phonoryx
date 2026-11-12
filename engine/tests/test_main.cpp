@@ -1,4 +1,4 @@
-#include "audioflow_capi.h"
+#include "phonoryx_capi.h"
 #include "audio_graph.hpp"
 #include "device_manager.hpp"
 #include "process_manager.hpp"
@@ -152,7 +152,7 @@ void test_cycle_and_validation_rejection() {
 }
 
 void test_dynamic_routing_preserves_active_route_and_wav() {
-    auto wav_path = std::filesystem::temp_directory_path() / "audioflow_test_rec.wav";
+    auto wav_path = std::filesystem::temp_directory_path() / "phonoryx_test_rec.wav";
     std::filesystem::remove(wav_path);
 
     af::AudioEngine engine(48000, 128);
@@ -243,10 +243,10 @@ int main() {
     test_windows_device_and_process_discovery();
 
     if (g_failures > 0) {
-        std::fprintf(stderr, "AudioFlow C++ tests FAILED (%d failures)\n", g_failures);
+        std::fprintf(stderr, "Phonoryx C++ tests FAILED (%d failures)\n", g_failures);
         return 1;
     }
-    std::printf("All AudioFlow C++ engine tests PASSED!\n");
+    std::printf("All Phonoryx C++ engine tests PASSED!\n");
     return 0;
 }
 
