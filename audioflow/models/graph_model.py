@@ -591,11 +591,14 @@ class ProjectModel:
             return self.refresh_device_availability(available_device_ids)
         return []
 
-    def save_file(self, path: Path | str) -> None:
+    def save_file(self, path: Path | str, extra: Optional[dict] = None) -> None:
         target = Path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
+        payload = self.to_project_dict()
+        if extra:
+            payload["extra"] = dict(extra)
         target.write_text(
-            json.dumps(self.to_project_dict(), indent=2), encoding="utf-8"
+            json.dumps(payload, indent=2), encoding="utf-8"
         )
 
     def load_file(

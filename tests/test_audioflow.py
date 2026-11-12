@@ -1013,12 +1013,14 @@ def test_refresh_button_and_comfyui_node_resize(tmp_path):
 
 def test_save_location_and_node_resize_persist_across_restarts(qapp, monkeypatch, tmp_path: Path):
     cache_path = tmp_path / "restart_save_cache.json"
-    project_file = tmp_path / "remembered_mix.aflow"
+    project_stem = tmp_path / "remembered_mix"
+    project_file = tmp_path / "remembered_mix.json"
     dialog_calls = []
 
     def _fake_save_dialog(*args, **kwargs):
         dialog_calls.append(args)
-        return str(project_file), "AudioFlow Project (*.aflow *.json)"
+        # Return extensionless name to verify ComfyUI-style automatic .json extension
+        return str(project_stem), "AudioFlow Workflow (*.json)"
 
     monkeypatch.setattr(QFileDialog, "getSaveFileName", _fake_save_dialog)
 
@@ -1103,6 +1105,11 @@ def test_save_location_and_node_resize_persist_across_restarts(qapp, monkeypatch
         assert n_gain.id in saved_ids
         assert saved_ids[n_eq.id]["width"] == pytest.approx(resized_w)
         assert saved_ids[n_eq.id]["height"] == pytest.approx(resized_h)
+        assert "ds" in saved_disk.get("extra", {})
+        assert "viewport" in saved_disk.get("extra", {})
+        assert len(dialog_calls[0]) >= 4
+        assert dialog_calls[0][2].endswith(".json")
+        assert "*.json" in dialog_calls[0][3]
 
         # Tab 2's resized node was preserved across restart too
         win2.workflow_tabs.setCurrentIndex(1)
@@ -1110,6 +1117,15 @@ def test_save_location_and_node_resize_persist_across_restarts(qapp, monkeypatch
         restored_tab2 = win2.canvas.node_items[n_tab2.id]
         assert restored_tab2._node_width() == pytest.approx(350.0)
         assert restored_tab2._compute_height() == pytest.approx(210.0)
+
+        # Opening saved .json workflow restores nodes and saved viewport
+        win2.workflow_tabs.setCurrentIndex(1)
+        win2.canvas.zoom_in()
+        win2.load_project_path(project_file)
+        qapp.processEvents()
+        assert win2.canvas.transform().m11() == pytest.approx(
+            saved_disk["extra"]["ds"]["scale"], rel=1e-3
+        )
     finally:
         win2.close()
 

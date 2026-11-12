@@ -1154,7 +1154,15 @@ class AudioFlowMainWindow(QMainWindow):
 
     def _save_to_path(self, target: Path) -> None:
         self.project_path = target
-        self.project.save_file(target)
+        vp = self.canvas.get_view_state()
+        extra = {
+            "ds": {
+                "scale": float(vp.get("zoom", 1.0)),
+                "offset": [float(vp.get("center_x", 0.0)), float(vp.get("center_y", 0.0))],
+            },
+            "viewport": vp,
+        }
+        self.project.save_file(target, extra=extra)
         idx = self.workflow_tabs.currentIndex()
         if 0 <= idx < len(self._tabs):
             self._tabs[idx].file_path = target
@@ -1172,13 +1180,26 @@ class AudioFlowMainWindow(QMainWindow):
         self._save_to_path(self.project_path)
 
     def save_project_as_dialog(self) -> None:
-        path, _ = QFileDialog.getSaveFileName(self, "Save AudioFlow Project", "", "AudioFlow Project (*.aflow *.json)")
+        default_name = f"{self._active_tab().base_title()}.json"
+        path, selected_filter = QFileDialog.getSaveFileName(
+            self,
+            "Save AudioFlow Workflow",
+            default_name,
+            "AudioFlow Workflow (*.json);;Legacy AudioFlow (*.aflow)",
+        )
         if not path:
             return
+        if not path.lower().endswith((".json", ".aflow")):
+            path += ".aflow" if "*.aflow" in selected_filter else ".json"
         self._save_to_path(Path(path))
 
     def open_project_dialog(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "Open AudioFlow Project", "", "AudioFlow Project (*.aflow *.json)")
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Open AudioFlow Workflow",
+            "",
+            "AudioFlow Workflows (*.json *.aflow);;JSON Files (*.json);;Legacy AudioFlow (*.aflow)",
+        )
         if path:
             self.load_project_path(Path(path))
 
@@ -1187,7 +1208,8 @@ class AudioFlowMainWindow(QMainWindow):
         try:
             self._devices = self.engine.enumerate_devices()
             avail_ids = {d.id for d in self._devices}
-            missing = self.project.load_file(path, available_device_ids=avail_ids)
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            missing = self.project.load_project_dict(raw, available_device_ids=avail_ids)
             self.project_path = path
             idx = self.workflow_tabs.currentIndex()
             if 0 <= idx < len(self._tabs):
@@ -1196,6 +1218,19 @@ class AudioFlowMainWindow(QMainWindow):
                 self._refresh_tab_title(idx)
             self.canvas.rebuild_from_project()
             self.canvas.update_catalog(self._devices, self._processes)
+            extra = raw.get("extra") if isinstance(raw.get("extra"), dict) else {}
+            vp = extra.get("viewport") if isinstance(extra.get("viewport"), dict) else raw.get("viewport")
+            if vp is None and isinstance(extra.get("ds"), dict):
+                ds = extra["ds"]
+                off = ds.get("offset")
+                if isinstance(off, list) and len(off) >= 2:
+                    vp = {
+                        "center_x": float(off[0]),
+                        "center_y": float(off[1]),
+                        "zoom": float(ds.get("scale", 1.0)),
+                    }
+            if isinstance(vp, dict):
+                self.canvas.set_view_state(vp)
             self.sync_graph_to_engine()
             if self._persist_cache:
                 self._cache_dirty = True
