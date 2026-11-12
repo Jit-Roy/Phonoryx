@@ -202,7 +202,7 @@ class AudioFlowMainWindow(QMainWindow):
         self.act_toggle_palette = QAction("Node Palette Sidebar", self)
         self.act_toggle_palette.setCheckable(True)
         self.act_toggle_palette.setChecked(True)
-        self.act_toggle_palette.triggered.connect(self.left_dock.setVisible)
+        self.act_toggle_palette.triggered.connect(self.set_palette_visible)
 
         self.act_zoom_in = QAction("Zoom In", self)
         self.act_zoom_in.setShortcut(QKeySequence("Ctrl+="))
@@ -385,7 +385,7 @@ class AudioFlowMainWindow(QMainWindow):
 
         self.bottom_panel.close_requested.connect(lambda: self.set_terminal_visible(False))
         self.bottom_dock.visibilityChanged.connect(self._sync_terminal_toggle_state)
-        self.left_dock.visibilityChanged.connect(self.act_toggle_palette.setChecked)
+        self.left_dock.visibilityChanged.connect(self._sync_palette_toggle_state)
 
         self.canvas.graph_changed.connect(self.sync_graph_to_engine)
         self.canvas.workspace_modified.connect(self._on_canvas_workspace_modified)
@@ -398,10 +398,23 @@ class AudioFlowMainWindow(QMainWindow):
         self.canvas.undo_stack.undoTextChanged.connect(lambda _=None: self._update_undo_redo_buttons())
         self.canvas.undo_stack.redoTextChanged.connect(lambda _=None: self._update_undo_redo_buttons())
 
-    # ----- Bottom Terminal Open/Close -----
+    # ----- Bottom Terminal & Palette Open/Close -----
+
+    def set_palette_visible(self, visible: bool) -> None:
+        self.left_dock.setVisible(visible)
+        if visible:
+            self.left_dock.raise_()
+        self._sync_palette_toggle_state(visible)
+
+    def _sync_palette_toggle_state(self, visible: bool) -> None:
+        self.act_toggle_palette.blockSignals(True)
+        self.act_toggle_palette.setChecked(visible)
+        self.act_toggle_palette.blockSignals(False)
 
     def set_terminal_visible(self, visible: bool) -> None:
         self.bottom_dock.setVisible(visible)
+        if visible:
+            self.bottom_dock.raise_()
         self._sync_terminal_toggle_state(visible)
 
     def toggle_terminal_panel(self) -> None:

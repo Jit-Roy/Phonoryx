@@ -628,6 +628,17 @@ def test_comfyui_inline_node_widgets_selection_tabs_and_terminal(qapp, tmp_path:
         qapp.processEvents()
         assert win.bottom_dock.isVisible()
         assert win.btn_status_terminal.isChecked()
+
+        # 7. Left Node Palette Sidebar closes and reopens cleanly via View -> Node Palette Sidebar
+        assert win.left_dock.isVisible()
+        win.left_dock.close()
+        qapp.processEvents()
+        assert not win.left_dock.isVisible()
+        assert not win.act_toggle_palette.isChecked()
+        win.act_toggle_palette.trigger()
+        qapp.processEvents()
+        assert win.left_dock.isVisible()
+        assert win.act_toggle_palette.isChecked()
     finally:
         win.close()
 
