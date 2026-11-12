@@ -1308,6 +1308,78 @@ def test_real_native_engines_run_concurrently_across_tabs(qapp, tmp_path: Path):
         win.close()
 
 
+def test_gap_reuse_naming_for_tabs_and_canvas_nodes(qapp, tmp_path: Path):
+    """Deleting a middle workflow tab or canvas node reuses the freed number on next creation."""
+    win = AudioFlowMainWindow(
+        auto_start=False,
+        cache_path=tmp_path / "gap_reuse_cache.json",
+        restore_cache=False,
+    )
+    try:
+        win.show()
+        qapp.processEvents()
+
+        # 1. Workflow tab naming: 1 -> 2 -> 3, close 2 -> next '+' is 2, then 4
+        assert win.workflow_tabs.tabText(0) == "Untitled Workflow"
+        win.btn_new_tab.click()
+        assert win.workflow_tabs.tabText(1) == "Untitled Workflow 2"
+        win.btn_new_tab.click()
+        assert win.workflow_tabs.tabText(2) == "Untitled Workflow 3"
+
+        win.close_workflow_tab(1)
+        qapp.processEvents()
+        assert [win.workflow_tabs.tabText(i) for i in range(win.workflow_tabs.count())] == [
+            "Untitled Workflow",
+            "Untitled Workflow 3",
+        ]
+
+        win.btn_new_tab.click()
+        qapp.processEvents()
+        assert win._tabs[-1].base_title() == "Untitled Workflow 2"
+
+        win.btn_new_tab.click()
+        qapp.processEvents()
+        assert win._tabs[-1].base_title() == "Untitled Workflow 4"
+
+        # Closing Tab 0 ('Untitled Workflow') frees slot 1 for the next '+'
+        win.close_workflow_tab(0)
+        qapp.processEvents()
+        win.btn_new_tab.click()
+        qapp.processEvents()
+        assert win._tabs[-1].base_title() == "Untitled Workflow"
+
+        # 2. Canvas node ID numbering: #1 -> #2 -> #3, delete #2 -> next node is #2 (and undo stays clean)
+        canvas = win.canvas
+        n1 = canvas.add_node_action(NodeType.VOLUME, scene_pos=QPointF(50, 50))
+        n2 = canvas.add_node_action(NodeType.GAIN, scene_pos=QPointF(250, 50))
+        n3 = canvas.add_node_action(NodeType.MUTE, scene_pos=QPointF(450, 50))
+        assert (n1.id, n2.id, n3.id) == (1, 2, 3)
+
+        canvas.scene_obj.clearSelection()
+        canvas.node_items[2].setSelected(True)
+        canvas.delete_selected_action()
+        qapp.processEvents()
+        assert set(canvas.project.nodes.keys()) == {1, 3}
+
+        n_reused = canvas.add_node_action(NodeType.EQUALIZER, scene_pos=QPointF(250, 150))
+        assert n_reused.id == 2
+        assert canvas.project.nodes[2].node_type == NodeType.EQUALIZER
+
+        n4 = canvas.add_node_action(NodeType.MIXER, scene_pos=QPointF(650, 50))
+        assert n4.id == 4
+
+        # Undo stack integrity: undo #4, undo reused #2 (EQ), undo delete of original #2 (Gain)
+        canvas.undo_stack.undo()
+        canvas.undo_stack.undo()
+        canvas.undo_stack.undo()
+        qapp.processEvents()
+        assert set(canvas.project.nodes.keys()) == {1, 2, 3}
+        assert canvas.project.nodes[2].node_type == NodeType.GAIN
+    finally:
+        win.close()
+
+
+
 
 
 

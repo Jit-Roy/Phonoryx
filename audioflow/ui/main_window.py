@@ -879,10 +879,23 @@ class AudioFlowMainWindow(QMainWindow):
                 self.close_workflow_tab(i)
                 return
 
+    def _next_untitled_workflow_title(self, exclude_tab: Optional[WorkflowTabState] = None) -> str:
+        existing = {
+            t.base_title().strip()
+            for t in self._tabs
+            if t is not exclude_tab
+        }
+        if "Untitled Workflow" not in existing and "Untitled Workflow 1" not in existing:
+            return "Untitled Workflow"
+        n = 2
+        while f"Untitled Workflow {n}" in existing:
+            n += 1
+        return f"Untitled Workflow {n}"
+
     def new_project_tab(self) -> int:
         self._next_tab_seq += 1
         proj = ProjectModel()
-        title = f"Untitled Workflow {self._next_tab_seq}"
+        title = self._next_untitled_workflow_title()
         tab = WorkflowTabState(
             tab_id=self._next_tab_seq,
             title=title,
@@ -1265,6 +1278,7 @@ class AudioFlowMainWindow(QMainWindow):
             idx = self.workflow_tabs.currentIndex()
             if 0 <= idx < len(self._tabs):
                 self._tabs[idx].file_path = None
+                self._tabs[idx].title = self._next_untitled_workflow_title(exclude_tab=self._tabs[idx])
                 self._tabs[idx].dirty = False
                 self._tabs[idx].view_state = None
                 self._refresh_tab_title(idx)

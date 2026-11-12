@@ -343,13 +343,19 @@ class ProjectModel:
         self._next_group_id = 1
 
     def allocate_node_id(self) -> int:
-        nid = self._next_node_id
-        self._next_node_id += 1
+        nid = 1
+        while nid in self.nodes:
+            nid += 1
+        if nid >= self._next_node_id:
+            self._next_node_id = nid + 1
         return nid
 
     def allocate_group_id(self) -> int:
-        gid = self._next_group_id
-        self._next_group_id += 1
+        gid = 1
+        while gid in self.groups:
+            gid += 1
+        if gid >= self._next_group_id:
+            self._next_group_id = gid + 1
         return gid
 
     def add_node(
