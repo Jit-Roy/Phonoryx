@@ -51,6 +51,7 @@ from audioflow.models.graph_model import (
     NodeModel,
     ProjectModel,
 )
+from audioflow.ui.icons import draw_node_type_icon
 from audioflow.ui.theme import (
     CANVAS_BG,
     CANVAS_GRID_MAJOR,
@@ -61,6 +62,7 @@ from audioflow.ui.theme import (
     COMFY_STROKE,
     COMFY_TEXT_PRIMARY,
     COMFY_TEXT_SECONDARY,
+    NODE_ACCENT_COLORS,
     NODE_BG,
     NODE_BORDER,
     NODE_SELECTED_BORDER,
@@ -82,11 +84,20 @@ from audioflow.ui.widget_helpers import (
 
 
 NODE_WIDTH = 264.0
+MIN_NODE_WIDTH = 220.0
+RESIZE_HANDLE_SIZE = 15.0
 HEADER_HEIGHT = 28.0
 PORT_ROW_HEIGHT = 20.0
 FOOTER_HEIGHT = 18.0
 PORT_RADIUS = 6.0
 NODE_DRAG_MIME_TYPE = "application/x-audioflow-node"
+
+_RESIZE_CURSORS = {
+    "NW": Qt.CursorShape.SizeFDiagCursor,
+    "SE": Qt.CursorShape.SizeFDiagCursor,
+    "NE": Qt.CursorShape.SizeBDiagCursor,
+    "SW": Qt.CursorShape.SizeBDiagCursor,
+}
 
 
 class _NoWheelComboBox(QComboBox):
@@ -178,6 +189,10 @@ class NodeItem(QGraphicsObject):
         self._collapsed = False
         self._updating_widgets = False
         self._widget_height = 0.0
+        self._resizing_dir: Optional[str] = None
+        self._hovered_resize_dir: Optional[str] = None
+        self._resize_start_scene: Optional[QPointF] = None
+        self._resize_start_rect: Optional[Tuple[float, float, float, float]] = None
 
         # Inline widget handles (populated dynamically based on node type)
         self._proxy: Optional[QGraphicsProxyWidget] = None
@@ -202,10 +217,12 @@ class NodeItem(QGraphicsObject):
             | QGraphicsItem.GraphicsItemFlag.ItemIsSelectable
             | QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges
         )
+        self.setAcceptHoverEvents(True)
         self.setPos(model.x, model.y)
         self.setZValue(2)
         self._build_ports()
         self._build_inline_widgets()
+        self._sync_ports_and_proxy_geometry()
         self.sync_from_model()
 
     def _port_area_height(self) -> float:
@@ -213,11 +230,80 @@ class NodeItem(QGraphicsObject):
         rows = max(len(spec.input_ports), len(spec.output_ports), 1)
         return 6.0 + rows * PORT_ROW_HEIGHT
 
+    def compute_min_size(self) -> Tuple[float, float]:
+        """Compute minimum non-clipping node content size (ComfyUI computeSize pattern)."""
+        min_w = (
+            240.0
+            if self.model.node_type
+            in (NodeType.EQUALIZER, NodeType.FILE_RECORDING, NodeType.CHANNEL_MAP)
+            else MIN_NODE_WIDTH
+        )
+        port_h = self._port_area_height()
+        widget_h = (self._widget_height + 6.0) if self._widget_height > 0 else 0.0
+        return (min_w, HEADER_HEIGHT + port_h + widget_h + FOOTER_HEIGHT)
+
+    def _node_width(self) -> float:
+        if self.model.width is None:
+            return NODE_WIDTH
+        min_w, _ = self.compute_min_size()
+        return max(min_w, float(self.model.width))
+
     def _compute_height(self) -> float:
         port_h = self._port_area_height()
-        if self._collapsed or self._widget_height <= 0:
+        if self._collapsed:
             return HEADER_HEIGHT + port_h + FOOTER_HEIGHT
-        return HEADER_HEIGHT + port_h + self._widget_height + 6.0 + FOOTER_HEIGHT
+        _, min_h = self.compute_min_size()
+        if self.model.height is None:
+            return min_h
+        return max(min_h, float(self.model.height))
+
+    def _sync_ports_and_proxy_geometry(self) -> None:
+        w = self._node_width()
+        for p in self.output_ports:
+            p.setPos(w, p.y())
+        self._layout_inline_proxy()
+
+    def apply_geometry(
+        self,
+        x: float,
+        y: float,
+        width: Optional[float],
+        height: Optional[float],
+        *,
+        emit_modified: bool = True,
+    ) -> None:
+        """Apply node bounds & position, keeping ports, widgets, wires and groups aligned."""
+        self.prepareGeometryChange()
+        min_w, min_h = self.compute_min_size()
+        self.model.width = max(min_w, float(width)) if width is not None else None
+        self.model.height = max(min_h, float(height)) if height is not None else None
+        if abs(self.pos().x() - x) > 1e-6 or abs(self.pos().y() - y) > 1e-6:
+            self.setPos(x, y)
+        self._sync_ports_and_proxy_geometry()
+        self.canvas.update_connections_for_node(self.model.id)
+        self.canvas.update_groups_geometry()
+        self.update()
+        if emit_modified:
+            self.canvas.workspace_modified.emit()
+
+    def _find_resize_direction(self, pos: QPointF) -> Optional[str]:
+        """Return SE/SW/NE/NW resize corner under ``pos`` (ComfyUI 15px handle convention)."""
+        if self._collapsed:
+            return None
+        w = self._node_width()
+        h = self._compute_height()
+        r = RESIZE_HANDLE_SIZE
+        px, py = pos.x(), pos.y()
+        if w - r <= px <= w + 2.0 and h - r <= py <= h + 2.0:
+            return "SE"
+        if -2.0 <= px <= r and h - r <= py <= h + 2.0:
+            return "SW"
+        if w - r <= px <= w + 2.0 and -2.0 <= py <= r:
+            return "NE"
+        # Top-left corner grip stops before collapse chevron button (x: 8..26)
+        if -2.0 <= px <= 8.0 and -2.0 <= py <= 8.0:
+            return "NW"
+        return None
 
     def _build_ports(self) -> None:
         spec = self.model.spec()
@@ -388,7 +474,8 @@ class NodeItem(QGraphicsObject):
         if self._proxy is None or self._widget_root is None:
             self._widget_height = 0.0
             return
-        self._widget_root.setFixedWidth(int(NODE_WIDTH - 16))
+        w = self._node_width()
+        self._widget_root.setFixedWidth(int(w - 16))
         if self._widget_root.layout() is not None:
             self._widget_root.layout().activate()
         self._widget_root.adjustSize()
@@ -396,7 +483,7 @@ class NodeItem(QGraphicsObject):
         self._widget_height = h
         widgets_top = HEADER_HEIGHT + self._port_area_height()
         self._proxy.setPos(8.0, widgets_top)
-        self._proxy.resize(NODE_WIDTH - 16.0, h)
+        self._proxy.resize(w - 16.0, h)
         self._proxy.setVisible(not self._collapsed)
 
     def set_collapsed(self, collapsed: bool) -> None:
@@ -585,11 +672,46 @@ class NodeItem(QGraphicsObject):
         self.update()
 
     def boundingRect(self) -> QRectF:
-        return QRectF(-2, -2, NODE_WIDTH + 4, self._compute_height() + 4)
+        return QRectF(-2, -2, self._node_width() + 4, self._compute_height() + 4)
+
+    def hoverMoveEvent(self, event) -> None:  # noqa: N802
+        rdir = self._find_resize_direction(event.pos())
+        if rdir != self._hovered_resize_dir:
+            self._hovered_resize_dir = rdir
+            if rdir is not None:
+                self.setCursor(_RESIZE_CURSORS[rdir])
+            else:
+                self.unsetCursor()
+            self.update()
+        super().hoverMoveEvent(event)
+
+    def hoverLeaveEvent(self, event) -> None:  # noqa: N802
+        if self._hovered_resize_dir is not None:
+            self._hovered_resize_dir = None
+            self.unsetCursor()
+            self.update()
+        super().hoverLeaveEvent(event)
 
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
             pos = event.pos()
+            rdir = self._find_resize_direction(pos)
+            if rdir is not None:
+                self._resizing_dir = rdir
+                self._resize_start_scene = event.scenePos()
+                self._resize_start_rect = (
+                    float(self.pos().x()),
+                    float(self.pos().y()),
+                    self._node_width(),
+                    self._compute_height(),
+                )
+                self.canvas._move_snapshot.clear()
+                if not self.isSelected() and self.scene() is not None:
+                    self.scene().clearSelection()
+                    self.setSelected(True)
+                self.setCursor(_RESIZE_CURSORS[rdir])
+                event.accept()
+                return
             if 0.0 <= pos.y() <= HEADER_HEIGHT and 0.0 <= pos.x() <= 26.0:
                 self.set_collapsed(not self._collapsed)
                 event.accept()
@@ -600,35 +722,108 @@ class NodeItem(QGraphicsObject):
                 return
         super().mousePressEvent(event)
 
+    def mouseMoveEvent(self, event) -> None:
+        if (
+            self._resizing_dir is not None
+            and self._resize_start_scene is not None
+            and self._resize_start_rect is not None
+        ):
+            dx = event.scenePos().x() - self._resize_start_scene.x()
+            dy = event.scenePos().y() - self._resize_start_scene.y()
+            rx, ry, rw, rh = self._resize_start_rect
+            nx, ny, nw, nh = rx, ry, rw, rh
+            d = self._resizing_dir
+            if d == "SE":
+                nw = rw + dx
+                nh = rh + dy
+            elif d == "NE":
+                ny = ry + dy
+                nw = rw + dx
+                nh = rh - dy
+            elif d == "SW":
+                nx = rx + dx
+                nw = rw - dx
+                nh = rh + dy
+            elif d == "NW":
+                nx = rx + dx
+                ny = ry + dy
+                nw = rw - dx
+                nh = rh - dy
+
+            min_w, min_h = self.compute_min_size()
+            if nw < min_w:
+                if "W" in d:
+                    nx = rx + rw - min_w
+                nw = min_w
+            if nh < min_h:
+                if "N" in d:
+                    ny = ry + rh - min_h
+                nh = min_h
+
+            self.apply_geometry(nx, ny, nw, nh, emit_modified=False)
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:
+        if self._resizing_dir is not None and self._resize_start_rect is not None:
+            old_rect = self._resize_start_rect
+            new_rect = (
+                float(self.pos().x()),
+                float(self.pos().y()),
+                self._node_width(),
+                self._compute_height(),
+            )
+            self._resizing_dir = None
+            self._resize_start_scene = None
+            self._resize_start_rect = None
+            hover_dir = self._find_resize_direction(event.pos())
+            self._hovered_resize_dir = hover_dir
+            if hover_dir is not None:
+                self.setCursor(_RESIZE_CURSORS[hover_dir])
+            else:
+                self.unsetCursor()
+            if any(abs(a - b) > 0.5 for a, b in zip(old_rect, new_rect)):
+                self.canvas.undo_stack.push(
+                    ResizeNodeCommand(self.canvas, self.model.id, old_rect, new_rect)
+                )
+            self.update()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
     def paint(self, painter: QPainter, option, widget=None) -> None:
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        w = self._node_width()
         h = self._compute_height()
         spec = self.model.spec()
-        header_hex, _ = CATEGORY_COLORS[spec.category]
+        header_hex, cat_accent = CATEGORY_COLORS[spec.category]
         body_hex = CATEGORY_BODY_COLORS[spec.category]
+        section_hex = NODE_ACCENT_COLORS.get(self.model.node_type, cat_accent)
 
-        card_rect = QRectF(0, 0, NODE_WIDTH, h)
+        card_rect = QRectF(0, 0, w, h)
+        card_path = QPainterPath()
+        card_path.addRoundedRect(card_rect, 8, 8)
         selected = self.isSelected()
         border_color = QColor(NODE_SELECTED_BORDER if selected else NODE_BORDER)
         if not self.model.device_available and not selected:
-            border_color = QColor("#E04E48")
+            border_color = QColor("#EC5158")
 
         painter.setPen(QPen(border_color, 2.2 if selected else 1.1))
         painter.setBrush(QBrush(QColor(body_hex)))
         painter.drawRoundedRect(card_rect, 8, 8)
 
-        # ComfyUI Header band
-        header_path = QPainterPath()
-        header_path.addRoundedRect(QRectF(0, 0, NODE_WIDTH, HEADER_HEIGHT), 8, 8)
+        # Header band + OneNote left section color stripe
         painter.save()
-        painter.setClipRect(QRectF(0, 0, NODE_WIDTH, HEADER_HEIGHT))
-        painter.fillPath(header_path, QColor(header_hex))
+        painter.setClipPath(card_path)
+        painter.fillRect(QRectF(0, 0, w, HEADER_HEIGHT), QColor(header_hex))
+        painter.fillRect(QRectF(0, 0, 3.5, h), QColor(section_hex))
         painter.restore()
 
-        painter.setPen(QPen(QColor("#242426"), 1.0))
-        painter.drawLine(QPointF(1, HEADER_HEIGHT), QPointF(NODE_WIDTH - 1, HEADER_HEIGHT))
+        painter.setPen(QPen(QColor(COMFY_STROKE), 1.0))
+        painter.drawLine(QPointF(3.5, HEADER_HEIGHT), QPointF(w - 1, HEADER_HEIGHT))
 
-        # Collapse chevron + Title
+        # Collapse chevron + Colorful node icon + Title
         painter.setPen(QColor(COMFY_TEXT_SECONDARY))
         painter.setFont(QFont("Segoe UI", 9))
         painter.drawText(
@@ -637,24 +832,30 @@ class NodeItem(QGraphicsObject):
             "▸" if self._collapsed else "▾",
         )
 
-        painter.setPen(QColor(COMFY_TEXT_PRIMARY if selected else "#E2E4E9"))
+        draw_node_type_icon(
+            painter,
+            QRectF(23.0, (HEADER_HEIGHT - 15.0) / 2.0, 15.0, 15.0),
+            self.model.node_type,
+        )
+
+        painter.setPen(QColor(COMFY_TEXT_PRIMARY if selected else "#ECEAF3"))
         painter.setFont(QFont("Segoe UI", 9, QFont.Weight.DemiBold))
         title = painter.fontMetrics().elidedText(
             f"#{self.model.id} {self.model.display_title()}",
             Qt.TextElideMode.ElideRight,
-            int(NODE_WIDTH - 44),
+            int(w - 62),
         )
         painter.drawText(
-            QRectF(24, 3, NODE_WIDTH - 44, HEADER_HEIGHT - 6),
+            QRectF(42, 3, w - 62, HEADER_HEIGHT - 6),
             Qt.AlignmentFlag.AlignVCenter,
             title,
         )
 
         # Small active/muted status indicator pill on far right of header
         painter.setPen(Qt.PenStyle.NoPen)
-        status_col = "#E04E48" if (self.model.muted or not self.model.device_available) else "#00CD72"
+        status_col = "#EC5158" if (self.model.muted or not self.model.device_available) else "#00C753"
         painter.setBrush(QColor(status_col))
-        painter.drawEllipse(QPointF(NODE_WIDTH - 13.0, HEADER_HEIGHT / 2.0), 3.5, 3.5)
+        painter.drawEllipse(QPointF(w - 13.0, HEADER_HEIGHT / 2.0), 3.5, 3.5)
 
         # Port labels
         label_font = QFont("Segoe UI", 8)
@@ -668,27 +869,34 @@ class NodeItem(QGraphicsObject):
             )
         for p in self.output_ports:
             painter.drawText(
-                QRectF(NODE_WIDTH - 107, p.y() - 9, 95, 18),
+                QRectF(w - 107, p.y() - 9, 95, 18),
                 Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight,
                 p.label,
             )
 
-        # Mini stereo L/R signal meter at bottom
-        bar_w = NODE_WIDTH - 20
+        # Mini stereo L/R signal meter at bottom (leave space on right for resize grip)
+        bar_w = max(40.0, w - 28.0)
         bar_y = h - 11.0
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor("#1A1A1C"))
+        painter.setBrush(QColor("#181620"))
         painter.drawRoundedRect(QRectF(10, bar_y, bar_w, 3), 1.5, 1.5)
         painter.drawRoundedRect(QRectF(10, bar_y + 4, bar_w, 3), 1.5, 1.5)
 
         if self._peak_l > 0.002:
-            col = "#F75951" if self._peak_l > 0.92 else ("#FCBB00" if self._peak_l > 0.72 else "#00CD72")
+            col = "#EC5158" if self._peak_l > 0.92 else ("#FFC114" if self._peak_l > 0.72 else "#00C753")
             painter.setBrush(QColor(col))
             painter.drawRoundedRect(QRectF(10, bar_y, bar_w * self._peak_l, 3), 1.5, 1.5)
         if self._peak_r > 0.002:
-            col = "#F75951" if self._peak_r > 0.92 else ("#FCBB00" if self._peak_r > 0.72 else "#00CD72")
+            col = "#EC5158" if self._peak_r > 0.92 else ("#FFC114" if self._peak_r > 0.72 else "#00C753")
             painter.setBrush(QColor(col))
             painter.drawRoundedRect(QRectF(10, bar_y + 4, bar_w * self._peak_r, 3), 1.5, 1.5)
+
+        # ComfyUI-style subtle bottom-right resize grip when expanded
+        if not self._collapsed:
+            grip_col = "#E5E5E5" if (self._hovered_resize_dir or self._resizing_dir) else "#7A7A7A"
+            painter.setPen(QPen(QColor(grip_col), 1.2, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+            for offset in (3.5, 6.5, 9.5):
+                painter.drawLine(QPointF(w - offset, h - 2.5), QPointF(w - 2.5, h - offset))
 
     def itemChange(self, change, value):
         if change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged:
@@ -736,7 +944,7 @@ class ConnectionItem(QGraphicsPathItem):
             return
 
         if self._active_level > 0.003:
-            base_pen = QPen(QColor("#2A4A3A"), 3.0)
+            base_pen = QPen(QColor("#234452"), 3.0)
             painter.setPen(base_pen)
             painter.drawPath(self.path())
 
@@ -779,7 +987,7 @@ class GroupItem(QGraphicsRectItem):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         base = QColor(self.group.color)
         fill = QColor(base.red(), base.green(), base.blue(), 42)
-        border = QColor(NODE_SELECTED_BORDER if self.isSelected() else "#475569")
+        border = QColor(NODE_SELECTED_BORDER if self.isSelected() else "#5E5773")
         painter.setPen(QPen(border, 1.5, Qt.PenStyle.DashLine))
         painter.setBrush(fill)
         painter.drawRoundedRect(r, 10, 10)
@@ -837,6 +1045,32 @@ class MoveNodesCommand(QUndoCommand):
     def undo(self) -> None:
         for nid, old_pos, _ in self.moves:
             self.canvas._set_node_pos_direct(nid, old_pos[0], old_pos[1])
+        self.canvas.workspace_modified.emit()
+
+
+class ResizeNodeCommand(QUndoCommand):
+    """Undoable corner resize command preserving node position and custom dimensions."""
+
+    def __init__(
+        self,
+        canvas: "NodeCanvas",
+        node_id: int,
+        old_rect: Tuple[float, float, Optional[float], Optional[float]],
+        new_rect: Tuple[float, float, Optional[float], Optional[float]],
+        label: str = "Resize Node",
+    ) -> None:
+        super().__init__(label)
+        self.canvas = canvas
+        self.node_id = node_id
+        self.old_rect = old_rect
+        self.new_rect = new_rect
+
+    def redo(self) -> None:
+        self.canvas._set_node_rect_direct(self.node_id, *self.new_rect)
+        self.canvas.workspace_modified.emit()
+
+    def undo(self) -> None:
+        self.canvas._set_node_rect_direct(self.node_id, *self.old_rect)
         self.canvas.workspace_modified.emit()
 
 
@@ -1243,6 +1477,35 @@ class NodeCanvas(QGraphicsView):
         if item is not None:
             item.setPos(x, y)
 
+    def _set_node_rect_direct(
+        self,
+        node_id: int,
+        x: float,
+        y: float,
+        width: Optional[float],
+        height: Optional[float],
+    ) -> None:
+        item = self.node_items.get(node_id)
+        if item is not None:
+            item.apply_geometry(x, y, width, height, emit_modified=False)
+
+    def resize_selected_to_fit_action(self) -> None:
+        """Reset selected nodes back to their default computed size (Comfy.Canvas.Resize)."""
+        sel = [it for it in self.scene_obj.selectedItems() if isinstance(it, NodeItem)]
+        for it in sel:
+            if it.model.width is None and it.model.height is None:
+                continue
+            old_rect = (
+                float(it.pos().x()),
+                float(it.pos().y()),
+                it.model.width,
+                it.model.height,
+            )
+            new_rect = (float(it.pos().x()), float(it.pos().y()), None, None)
+            self.undo_stack.push(
+                ResizeNodeCommand(self, it.model.id, old_rect, new_rect, "Resize Node to Fit")
+            )
+
     def _insert_connection_direct(self, conn: ConnectionModel) -> None:
         if conn not in self.project.connections:
             self.project.connections.append(conn)
@@ -1543,7 +1806,7 @@ class NodeCanvas(QGraphicsView):
                 self._drag_port = port
                 start = port.center_scene_pos()
                 self._temp_wire = QGraphicsPathItem(QPainterPath(start))
-                self._temp_wire.setPen(QPen(QColor("#38BDF8"), 2.4, Qt.PenStyle.DashLine))
+                self._temp_wire.setPen(QPen(QColor("#FFC114"), 2.4, Qt.PenStyle.DashLine))
                 self._temp_wire.setZValue(10)
                 self.scene_obj.addItem(self._temp_wire)
                 event.accept()
@@ -1718,10 +1981,17 @@ class NodeCanvas(QGraphicsView):
         sel_nodes = [it for it in self.scene_obj.selectedItems() if isinstance(it, NodeItem)]
         if sel_nodes:
             act_group = menu.addAction("Group Selected Nodes")
+            act_fit_size = (
+                menu.addAction("Resize to Fit")
+                if any(it.model.width is not None or it.model.height is not None for it in sel_nodes)
+                else None
+            )
             act_del = menu.addAction("Delete Selected")
             chosen = menu.exec(event.globalPos())
             if chosen == act_group:
                 self.group_selected_action()
+            elif act_fit_size is not None and chosen == act_fit_size:
+                self.resize_selected_to_fit_action()
             elif chosen == act_del:
                 self.delete_selected_action()
             return

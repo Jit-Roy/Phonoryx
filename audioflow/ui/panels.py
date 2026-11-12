@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Dict, List, Optional
 
-from PySide6.QtCore import QMimeData, QPoint, Qt, Signal
+from PySide6.QtCore import QMimeData, QPoint, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QDrag, QFont, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -50,6 +50,7 @@ from audioflow.models.graph_model import (
     NodeModel,
 )
 from audioflow.ui.canvas import NODE_DRAG_MIME_TYPE
+from audioflow.ui.icons import app_session_icon, device_icon, node_type_icon, ui_icon
 from audioflow.ui.widget_helpers import (
     build_device_combo_entries,
     build_process_combo_entries,
@@ -76,10 +77,10 @@ class DraggablePaletteList(QListWidget):
         pix.fill(Qt.GlobalColor.transparent)
         p = QPainter(pix)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        p.setBrush(QColor(35, 43, 56, 235))
-        p.setPen(QPen(QColor("#3a76f0"), 1.5))
+        p.setBrush(QColor(38, 38, 38, 240))
+        p.setPen(QPen(QColor("#8A8A8A"), 1.5))
         p.drawRoundedRect(1, 1, width - 2, height - 2, 7, 7)
-        p.setPen(QColor("#e8eef7"))
+        p.setPen(QColor("#EDEDED"))
         p.setFont(QFont("Segoe UI", 9, QFont.Weight.DemiBold))
         p.drawText(12, 0, width - 24, height, Qt.AlignmentFlag.AlignVCenter, label)
         p.end()
@@ -118,6 +119,9 @@ class LeftPalettePanel(QWidget):
         hdr = QHBoxLayout()
         hdr.setContentsMargins(2, 0, 0, 0)
         hdr.setSpacing(6)
+        lbl_icon = QLabel()
+        lbl_icon.setPixmap(ui_icon("palette", 16).pixmap(16, 16))
+        hdr.addWidget(lbl_icon)
         lbl_title = QLabel("Palette & Sources")
         lbl_title.setStyleSheet("color: #FFFFFF; font-weight: 600;")
         hdr.addWidget(lbl_title)
@@ -132,6 +136,8 @@ class LeftPalettePanel(QWidget):
         layout.addLayout(hdr)
 
         self.tabs = QTabWidget()
+        self.tabs.setObjectName("PaletteTabs")
+        self.tabs.setIconSize(QSize(13, 13))
         layout.addWidget(self.tabs)
 
         # Tab 1: Palette (Sources / Processing / Outputs)
@@ -141,7 +147,7 @@ class LeftPalettePanel(QWidget):
         self._populate_palette()
         self.palette_list.itemDoubleClicked.connect(self._on_palette_activate)
         pal_lay.addWidget(self.palette_list)
-        self.tabs.addTab(pal_widget, "Nodes")
+        self.tabs.addTab(pal_widget, ui_icon("tab_nodes", 15), "Nodes")
 
         # Tab 2: Windows Audio Devices
         dev_widget = QWidget()
@@ -149,7 +155,7 @@ class LeftPalettePanel(QWidget):
         self.device_list = DraggablePaletteList()
         self.device_list.itemDoubleClicked.connect(self._on_device_activate)
         dev_lay.addWidget(self.device_list)
-        self.tabs.addTab(dev_widget, "Devices")
+        self.tabs.addTab(dev_widget, ui_icon("tab_devices", 15), "Devices")
 
         # Tab 3: Running Applications
         proc_widget = QWidget()
@@ -164,24 +170,26 @@ class LeftPalettePanel(QWidget):
         proc_lay.addWidget(self.proc_filter)
         proc_lay.addWidget(self.chk_audio_only)
         proc_lay.addWidget(self.proc_list)
-        self.tabs.addTab(proc_widget, "Apps")
+        self.tabs.addTab(proc_widget, ui_icon("tab_apps", 15), "Apps")
 
         self._processes: List[ProcessInfo] = []
 
     def _populate_palette(self) -> None:
         self.palette_list.clear()
         sections = [
-            ("--- SOURCE NODES ---", NodeCategory.SOURCE),
-            ("--- PROCESSING NODES ---", NodeCategory.PROCESSING),
-            ("--- OUTPUT NODES ---", NodeCategory.OUTPUT),
+            ("--- SOURCE NODES ---", NodeCategory.SOURCE, "#32A6FF", "#1E1E1E"),
+            ("--- PROCESSING NODES ---", NodeCategory.PROCESSING, "#FFC114", "#1E1E1E"),
+            ("--- OUTPUT NODES ---", NodeCategory.OUTPUT, "#00C753", "#1E1E1E"),
         ]
-        for header, cat in sections:
+        for header, cat, fg_hex, bg_hex in sections:
             h_item = QListWidgetItem(header)
             h_item.setFlags(Qt.ItemFlag.NoItemFlags)
+            h_item.setForeground(QColor(fg_hex))
+            h_item.setBackground(QColor(bg_hex))
             self.palette_list.addItem(h_item)
             for nt, spec in NODE_SPECS.items():
                 if spec.category == cat:
-                    it = QListWidgetItem(f"  {spec.title}")
+                    it = QListWidgetItem(node_type_icon(nt, 16), f"  {spec.title}")
                     it.setData(Qt.ItemDataRole.UserRole, int(nt))
                     it.setData(
                         DraggablePaletteList.NODE_PAYLOAD_ROLE,
@@ -207,7 +215,10 @@ class LeftPalettePanel(QWidget):
             flow_tag = "IN" if d.flow == DataFlow.CAPTURE else "OUT"
             virt_tag = " [VIRTUAL]" if d.is_virtual else ""
             def_tag = " *" if d.is_default else ""
-            it = QListWidgetItem(f"[{flow_tag}]{virt_tag}{def_tag} {d.name}")
+            it = QListWidgetItem(
+                device_icon(d.flow == DataFlow.CAPTURE, d.is_virtual, 16),
+                f"[{flow_tag}]{virt_tag}{def_tag} {d.name}",
+            )
             it.setData(Qt.ItemDataRole.UserRole, d)
             it.setData(
                 DraggablePaletteList.NODE_PAYLOAD_ROLE,
@@ -237,7 +248,7 @@ class LeftPalettePanel(QWidget):
                 badge = f"[AUDIO {pct}%] " if pct > 0 else "[AUDIO] "
             else:
                 badge = ""
-            it = QListWidgetItem(badge + label)
+            it = QListWidgetItem(app_session_icon(p.has_audio_session, 16), badge + label)
             it.setData(Qt.ItemDataRole.UserRole, p)
             it.setData(
                 DraggablePaletteList.NODE_PAYLOAD_ROLE,
@@ -626,30 +637,31 @@ class BottomTelemetryPanel(QWidget):
         self.meter_table = QTableWidget(0, 4)
         self.meter_table.setHorizontalHeaderLabels(["Node", "Left Peak", "Right Peak", "XRUNs"])
         self.meter_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self.tabs.addTab(self.meter_table, "Meters")
+        self.tabs.addTab(self.meter_table, ui_icon("tab_meters", 15), "Meters")
 
         # Tab 2: Active Connections
         self.conn_table = QTableWidget(0, 4)
         self.conn_table.setHorizontalHeaderLabels(["Source Node", "Out Port", "Dest Node", "In Port"])
         self.conn_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self.tabs.addTab(self.conn_table, "Active Connections")
+        self.tabs.addTab(self.conn_table, ui_icon("tab_connections", 15), "Active Connections")
 
         # Tab 3: Engine & Device Status
         status_w = QWidget()
         s_lay = QVBoxLayout(status_w)
         self.lbl_engine_summary = QLabel("Engine Stopped")
+        self.lbl_engine_summary.setStyleSheet("color: #EAEAEA; font-weight: 600;")
         self.device_status_table = QTableWidget(0, 4)
         self.device_status_table.setHorizontalHeaderLabels(["Device Name", "Direction", "Rate", "Kind"])
         self.device_status_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         s_lay.addWidget(self.lbl_engine_summary)
         s_lay.addWidget(self.device_status_table)
-        self.tabs.addTab(status_w, "Engine && Devices")
+        self.tabs.addTab(status_w, ui_icon("tab_engine", 15), "Engine && Devices")
 
         # Tab 4: Logs
         self.log_console = QPlainTextEdit()
         self.log_console.setReadOnly(True)
         self.log_console.setMaximumBlockCount(400)
-        self.tabs.addTab(self.log_console, "Logs")
+        self.tabs.addTab(self.log_console, ui_icon("tab_logs", 15), "Logs")
 
     def append_log(self, level: str, text: str) -> None:
         self.log_console.appendPlainText(f"[{level}] {text}")

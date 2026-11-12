@@ -1,62 +1,129 @@
-"""ComfyUI-faithful dark theme palette and Qt stylesheet for AudioFlow Studio."""
+"""Microsoft OneNote Fluent Dark theme palette and Qt stylesheet for AudioFlow Studio.
+
+Color tokens align with OneNote / Office Fluent dark surfaces (#141414, #1F1F1F,
+#242424, #292929), OneNote plum/purple brand accents (#7719AA, #80397B, #A071EE),
+and the 16-section color palette extracted from OneNote's shipped resources.
+"""
 
 from __future__ import annotations
 
-# ComfyUI Core Dark Theme Tokens (extracted from comfyui_frontend_package/static dark palette)
-COMFY_BG_COLOR = "#202020"          # --bg-color
-COMFY_MENU_BG = "#171718"           # --comfy-menu-bg / --color-charcoal-800
-COMFY_MENU_SECONDARY_BG = "#303030" # --comfy-menu-secondary-bg
-COMFY_SURFACE_PANEL = "#202121"     # --color-charcoal-700
-COMFY_SURFACE_CARD = "#262729"      # --color-charcoal-600
-COMFY_SURFACE_ELEVATED = "#2D2E32"  # --color-charcoal-500
-COMFY_SURFACE_HOVER = "#313235"     # --color-charcoal-400
-COMFY_INPUT_BG = "#222222"          # --comfy-input-bg / WIDGET_BGCOLOR
-COMFY_STROKE = "#313235"            # --interface-stroke
-COMFY_BORDER = "#4E4E4E"            # --border-color
-COMFY_WIDGET_OUTLINE = "#666666"    # WIDGET_OUTLINE_COLOR
-COMFY_TEXT_PRIMARY = "#FFFFFF"      # --fg-color
-COMFY_TEXT_INPUT = "#DDDDDD"        # WIDGET_TEXT_COLOR
-COMFY_TEXT_SECONDARY = "#B2B7BD"    # WIDGET_SECONDARY_TEXT_COLOR / --descrip-text
-COMFY_TEXT_MUTED = "#999999"        # NODE_TITLE_COLOR
-COMFY_ACCENT_BLUE = "#0B8CE9"       # --color-azure-600
-COMFY_ACCENT_BLUE_LIGHT = "#31B9F4" # --color-azure-400
-COMFY_ACCENT_GREEN = "#00CD72"      # --color-jade-600
-COMFY_ACCENT_RED = "#E04E48"        # --color-coral-600
+from audioflow.engine_bridge import NodeType
 
-# ComfyUI LiteGraph Canvas & Link Colors
-CANVAS_BG = "#141414"               # CLEAR_BACKGROUND_COLOR
-CANVAS_GRID_MINOR = "#1C1C1E"
-CANVAS_GRID_MAJOR = "#27272A"
+# OneNote Brand & Fluent Purple Accents
+ONENOTE_BRAND_PURPLE = "#7719AA"
+ONENOTE_BRAND_PLUM = "#80397B"
+ONENOTE_BRAND_VIOLET = "#A071EE"
+ONENOTE_BRAND_IRIS = "#6462E4"
+ONENOTE_BRAND_LAVENDER = "#B49EDE"
+ONENOTE_BRAND_DEEP_PLUM = "#5B2D90"
 
-NODE_BG = "#353535"                 # NODE_DEFAULT_BGCOLOR
-NODE_BORDER = "#4E4E4E"             # NODE_DEFAULT_BOXCOLOR / --border-color
-NODE_SELECTED_BORDER = "#FFFFFF"    # NODE_BOX_OUTLINE_COLOR / --node-component-outline
+# OneNote 16-Section Vibrant & Pastel Accent Swatches (from onmain.DLL ColorMap/ThemeColors)
+ONENOTE_SECTION_COLORS = (
+    "#A071EE",  # 0: OneNote Violet
+    "#0088F0",  # 1: Blue
+    "#00C753",  # 2: Emerald Green
+    "#FFC114",  # 3: Gold
+    "#1EC3B4",  # 4: Teal
+    "#EC5158",  # 5: Coral Red
+    "#B973D3",  # 6: Orchid
+    "#F6630D",  # 7: Orange
+    "#32A6FF",  # 8: Azure
+    "#7EC400",  # 9: Lime
+    "#E45383",  # 10: Rose
+    "#00A0D7",  # 11: Cyan
+    "#C6A377",  # 12: Tan / Copper
+    "#7D7DF2",  # 13: Periwinkle
+    "#009E42",  # 14: Forest Green
+    "#8AA8E4",  # 15: Mist Blue
+)
 
-# ComfyUI LGraphCanvas.node_colors header/body conventions by AudioFlow category
+# OneNote Fluent Dark Neutral Surfaces (pure black / charcoal / grey / white — no purple wash)
+COMFY_BG_COLOR = "#141414"          # Primary window / workspace background
+COMFY_MENU_BG = "#1B1B1B"           # Top command chrome, menus, dock title bars
+COMFY_MENU_SECONDARY_BG = "#252525" # Secondary toolbar / separator fill
+COMFY_SURFACE_PANEL = "#1E1E1E"     # Dock panel body surface
+COMFY_SURFACE_CARD = "#252525"      # Cards, unselected interactive chips
+COMFY_SURFACE_ELEVATED = "#2E2E2E"  # Active tab, pressed/elevated controls
+COMFY_SURFACE_HOVER = "#383838"     # Hover state surface
+COMFY_INPUT_BG = "#161616"          # Text boxes, combo inputs, slider wells
+COMFY_STROKE = "#2D2D2D"            # Panel dividers & hairline borders
+COMFY_BORDER = "#424242"            # Control borders
+COMFY_WIDGET_OUTLINE = "#595959"    # Inline widget outlines on canvas cards
+COMFY_TEXT_PRIMARY = "#FFFFFF"      # Primary high-contrast foreground
+COMFY_TEXT_INPUT = "#EDEDED"        # Clean light grey/white UI text
+COMFY_TEXT_SECONDARY = "#BCBCBC"    # Muted labels, port names
+COMFY_TEXT_MUTED = "#8A8A8A"        # Inactive tabs, secondary metadata
+COMFY_ACCENT_BLUE = "#0078D4"       # Fluent neutral accent
+COMFY_ACCENT_BLUE_LIGHT = "#32A6FF" # Subtle focus / active underline accent
+COMFY_ACCENT_AZURE = "#0088F0"
+COMFY_ACCENT_GREEN = "#00C753"
+COMFY_ACCENT_RED = "#EC5158"
+COMFY_ACCENT_GOLD = "#FFC114"
+COMFY_ACCENT_TEAL = "#1EC3B4"
+COMFY_ACCENT_CYAN = "#00CCF9"
+
+# Infinite Patchbay Canvas & Grid Colors (true neutral charcoal like OneNote dark page)
+CANVAS_BG = "#121212"
+CANVAS_GRID_MINOR = "#1A1A1A"
+CANVAS_GRID_MAJOR = "#242424"
+
+NODE_BG = "#232323"
+NODE_BORDER = "#3C3C3C"
+NODE_SELECTED_BORDER = "#E5E5E5"
+
+# Neutral dark card surfaces across categories (color comes from section stripes & icons)
 CATEGORY_COLORS = {
-    "source": ("#2A363B", "#64B5F6"),      # pale_blue header + IMAGE blue slot
-    "processing": ("#333333", "#B39DDB"),  # default ComfyUI header + MODEL violet slot
-    "output": ("#223322", "#6EE7B7"),      # green header + CONTROL_NET mint slot
+    "source": ("#292929", "#32A6FF"),
+    "processing": ("#292929", "#FFC114"),
+    "output": ("#292929", "#00C753"),
 }
 
 CATEGORY_BODY_COLORS = {
-    "source": "#2F3D44",     # muted pale_blue body
-    "processing": "#353535", # NODE_DEFAULT_BGCOLOR
-    "output": "#2A3A2B",     # muted LiteGraph green body
+    "source": "#212121",
+    "processing": "#212121",
+    "output": "#212121",
 }
 
-PORT_INPUT_COLOR = "#64B5F6"        # ComfyUI IMAGE slot blue
-PORT_OUTPUT_COLOR = "#6EE7B7"       # ComfyUI CONTROL_NET slot mint
-WIRE_IDLE_COLOR = "#99AA99"         # ComfyUI LINK_COLOR (#9A9)
-WIRE_ACTIVE_COLOR = "#AAFFAA"       # ComfyUI CONNECTING_LINK_COLOR (#AFA)
-WIRE_SELECTED_COLOR = "#FFFFFF"     # Selected outline white
+# Individual OneNote Section Accents per NodeType (used for section stripes & colorful icons)
+NODE_ACCENT_COLORS = {
+    NodeType.APP_CAPTURE: "#A071EE",      # Fluent Violet
+    NodeType.SYSTEM_CAPTURE: "#00CCF9",   # Vivid Cyan
+    NodeType.MIC_INPUT: "#32A6FF",        # Electric Azure
+    NodeType.VIRTUAL_INPUT: "#7D7DF2",    # Iris Periwinkle
+    NodeType.VOLUME: "#FFC114",           # OneNote Gold
+    NodeType.GAIN: "#F6630D",             # Warm Orange
+    NodeType.MIXER: "#B973D3",            # Orchid
+    NodeType.SPLITTER: "#1EC3B4",         # Teal
+    NodeType.MUTE: "#EC5158",             # Coral Red
+    NodeType.STEREO_TO_MONO: "#E45383",   # Rose
+    NodeType.MONO_TO_STEREO: "#8AA8E4",   # Mist Blue
+    NodeType.CHANNEL_MAP: "#F6B078",      # Apricot Copper
+    NodeType.EQUALIZER: "#7EC400",        # Lime Chartreuse
+    NodeType.SPEAKER_OUTPUT: "#00C753",   # Emerald Green
+    NodeType.VIRTUAL_OUTPUT: "#1EC3B4",   # Aqua Teal
+    NodeType.FILE_RECORDING: "#EC5158",   # Recording Coral
+}
+
+PORT_INPUT_COLOR = "#32A6FF"        # Azure input slot
+PORT_OUTPUT_COLOR = "#00C753"       # Emerald output slot
+WIRE_IDLE_COLOR = "#A4AAB4"         # Neutral silver-slate wire
+WIRE_ACTIVE_COLOR = "#00CCF9"       # Luminous Cyan live audio flow
+WIRE_SELECTED_COLOR = "#FFC114"     # Gold selected wire highlight
 
 STUDIO_STYLESHEET = f"""
 QMainWindow, QDialog {{
     background-color: {COMFY_BG_COLOR};
     color: {COMFY_TEXT_INPUT};
-    font-family: 'Inter', 'Segoe UI', sans-serif;
+    font-family: 'Segoe UI', 'Inter', sans-serif;
     font-size: 12px;
+}}
+
+QToolTip {{
+    background-color: {COMFY_SURFACE_CARD};
+    color: {COMFY_TEXT_PRIMARY};
+    border: 1px solid {COMFY_BORDER};
+    border-radius: 5px;
+    padding: 4px 8px;
 }}
 
 QMenuBar {{
@@ -69,9 +136,9 @@ QMenuBar {{
 }}
 QMenuBar::item {{
     background: transparent;
-    padding: 5px 8px;
+    padding: 5px 9px;
     margin: 0px;
-    border-radius: 4px;
+    border-radius: 5px;
 }}
 QMenuBar::item:selected {{
     background-color: {COMFY_SURFACE_HOVER};
@@ -80,25 +147,25 @@ QMenuBar::item:selected {{
 QMenu {{
     background-color: {COMFY_MENU_BG};
     color: {COMFY_TEXT_INPUT};
-    border: 1px solid {COMFY_STROKE};
-    border-radius: 6px;
+    border: 1px solid {COMFY_BORDER};
+    border-radius: 7px;
     padding: 4px;
 }}
 QMenu::item {{
-    padding: 6px 22px 6px 12px;
-    border-radius: 4px;
+    padding: 6px 22px 6px 10px;
+    border-radius: 5px;
 }}
 QMenu::item:selected {{
-    background-color: {COMFY_SURFACE_HOVER};
+    background-color: {COMFY_SURFACE_ELEVATED};
     color: {COMFY_TEXT_PRIMARY};
 }}
 QMenu::separator {{
     height: 1px;
     background: {COMFY_STROKE};
-    margin: 4px 6px;
+    margin: 4px 8px;
 }}
 
-/* ComfyUI Topbar & Workflow Tabs */
+/* OneNote Fluent Command Topbar & Section-Style Workflow Tabs */
 QWidget#ComfyTopBar {{
     background-color: {COMFY_MENU_BG};
     border-bottom: 1px solid {COMFY_STROKE};
@@ -115,8 +182,8 @@ QTabBar#WorkflowTabs::tab {{
     border: none;
     border-right: 1px solid {COMFY_STROKE};
     font-size: 12px;
-    min-width: 110px;
-    max-width: 220px;
+    min-width: 118px;
+    max-width: 240px;
 }}
 QTabBar#WorkflowTabs::tab:hover {{
     background-color: {COMFY_SURFACE_CARD};
@@ -126,7 +193,7 @@ QTabBar#WorkflowTabs::tab:selected {{
     background-color: {COMFY_SURFACE_ELEVATED};
     color: {COMFY_TEXT_PRIMARY};
     font-weight: 600;
-    border-bottom: 2px solid {COMFY_ACCENT_BLUE_LIGHT};
+    border-bottom: 2px solid #D0D0D0;
 }}
 QToolButton#NewWorkflowButton {{
     background-color: transparent;
@@ -136,7 +203,7 @@ QToolButton#NewWorkflowButton {{
     padding: 0px;
     margin: 0px 2px;
     font-size: 15px;
-    font-weight: 500;
+    font-weight: 600;
 }}
 QToolButton#NewWorkflowButton:hover {{
     background-color: {COMFY_SURFACE_HOVER};
@@ -148,42 +215,44 @@ QToolButton#ComfyIconBtn {{
     color: {COMFY_TEXT_INPUT};
     border: 1px solid {COMFY_STROKE};
     border-radius: 6px;
-    padding: 4px 8px;
+    padding: 4px 9px;
     min-height: 26px;
 }}
 QToolButton#ComfyIconBtn:hover {{
     background-color: {COMFY_SURFACE_HOVER};
+    border-color: {COMFY_BORDER};
     color: {COMFY_TEXT_PRIMARY};
 }}
 QToolButton#ComfyIconBtn:disabled {{
-    color: #5C626D;
+    color: #5A5A5A;
     background-color: {COMFY_MENU_BG};
 }}
 
 QPushButton#ComfyRunButton {{
-    background-color: {COMFY_ACCENT_BLUE};
+    background-color: #107C41;
     color: #FFFFFF;
-    border: 1px solid {COMFY_ACCENT_BLUE_LIGHT};
+    border: 1px solid #21A35B;
     border-radius: 6px;
     padding: 4px 14px;
     font-weight: 600;
     min-height: 26px;
 }}
 QPushButton#ComfyRunButton:hover {{
-    background-color: #1997F2;
+    background-color: #16934F;
+    border-color: #35BC71;
 }}
 QPushButton#ComfyRunButton[running="true"] {{
     background-color: {COMFY_ACCENT_RED};
-    border-color: #F75951;
+    border-color: #FF7A80;
 }}
 QPushButton#ComfyRunButton[running="true"]:hover {{
-    background-color: #F75951;
+    background-color: #F46269;
 }}
 
 /* Floating Bottom-Right Canvas Controls (GraphCanvasMenu) */
 QFrame#CanvasFloatingBar {{
     background-color: {COMFY_MENU_BG};
-    border: 1px solid {COMFY_STROKE};
+    border: 1px solid {COMFY_BORDER};
     border-radius: 8px;
 }}
 QToolButton#CanvasMenuBtn {{
@@ -225,8 +294,8 @@ QTabWidget#BottomTerminalTabs::pane {{
 QTabWidget#BottomTerminalTabs > QTabBar::tab {{
     background-color: transparent;
     color: {COMFY_TEXT_MUTED};
-    padding: 7px 14px;
-    margin: 2px 4px;
+    padding: 7px 13px;
+    margin: 2px 3px;
     border: none;
     border-radius: 6px;
     font-size: 12px;
@@ -238,27 +307,39 @@ QTabWidget#BottomTerminalTabs > QTabBar::tab:hover {{
 QTabWidget#BottomTerminalTabs > QTabBar::tab:selected {{
     background-color: {COMFY_SURFACE_ELEVATED};
     color: {COMFY_TEXT_PRIMARY};
+    border-bottom: 2px solid #D0D0D0;
     font-weight: 600;
 }}
 
 QTabWidget::pane {{
     border: 1px solid {COMFY_STROKE};
-    background-color: {COMFY_MENU_BG};
+    border-radius: 6px;
+    background-color: {COMFY_SURFACE_PANEL};
 }}
 QTabBar::tab {{
-    background-color: {COMFY_SURFACE_PANEL};
+    background-color: {COMFY_MENU_BG};
     color: {COMFY_TEXT_MUTED};
-    padding: 6px 12px;
+    padding: 6px 11px;
     border: 1px solid {COMFY_STROKE};
     border-bottom: none;
-    border-top-left-radius: 5px;
-    border-top-right-radius: 5px;
+    border-top-left-radius: 6px;
+    border-top-right-radius: 6px;
     margin-right: 2px;
+}}
+QTabBar::tab:hover {{
+    background-color: {COMFY_SURFACE_CARD};
+    color: {COMFY_TEXT_INPUT};
 }}
 QTabBar::tab:selected {{
     background-color: {COMFY_SURFACE_ELEVATED};
     color: {COMFY_TEXT_PRIMARY};
+    border-top: 2px solid #D0D0D0;
     font-weight: 600;
+}}
+QTabWidget#PaletteTabs > QTabBar::tab {{
+    padding: 5px 7px;
+    font-size: 11px;
+    margin-right: 2px;
 }}
 
 QToolButton#TerminalCloseButton {{
@@ -272,8 +353,8 @@ QToolButton#TerminalCloseButton {{
     margin: 2px 6px;
 }}
 QToolButton#TerminalCloseButton:hover {{
-    background-color: {COMFY_SURFACE_HOVER};
-    color: {COMFY_TEXT_PRIMARY};
+    background-color: #4A2431;
+    color: #FF8B90;
 }}
 
 /* Terminal Reopen Strip / Button */
@@ -297,18 +378,21 @@ QToolButton#TerminalToggleBtn:hover {{
 QToolButton#TerminalToggleBtn:checked {{
     background-color: {COMFY_SURFACE_ELEVATED};
     color: {COMFY_TEXT_PRIMARY};
-    border-color: {COMFY_ACCENT_BLUE};
+    border-color: #707070;
 }}
 
-QListWidget, QTableWidget, QTextEdit {{
+QListWidget, QTableWidget, QTextEdit, QPlainTextEdit {{
     background-color: {COMFY_BG_COLOR};
     color: {COMFY_TEXT_INPUT};
     border: 1px solid {COMFY_STROKE};
-    border-radius: 5px;
+    border-radius: 6px;
+    selection-background-color: {COMFY_SURFACE_ELEVATED};
+    selection-color: {COMFY_TEXT_PRIMARY};
 }}
 QListWidget::item {{
     padding: 5px 8px;
-    border-radius: 4px;
+    border-radius: 5px;
+    margin: 1px 2px;
 }}
 QListWidget::item:hover {{
     background-color: {COMFY_SURFACE_CARD};
@@ -316,6 +400,7 @@ QListWidget::item:hover {{
 QListWidget::item:selected {{
     background-color: {COMFY_SURFACE_ELEVATED};
     color: {COMFY_TEXT_PRIMARY};
+    border-left: 2px solid #D0D0D0;
 }}
 
 QHeaderView::section {{
@@ -325,14 +410,18 @@ QHeaderView::section {{
     border: none;
     border-right: 1px solid {COMFY_STROKE};
     border-bottom: 1px solid {COMFY_STROKE};
+    font-weight: 600;
 }}
 
 QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {{
     background-color: {COMFY_INPUT_BG};
     color: {COMFY_TEXT_INPUT};
     border: 1px solid {COMFY_BORDER};
-    border-radius: 4px;
+    border-radius: 5px;
     padding: 4px 6px;
+}}
+QLineEdit:focus, QComboBox:focus {{
+    border-color: #8A8A8A;
 }}
 QComboBox::drop-down {{
     border: none;
@@ -342,7 +431,8 @@ QComboBox QAbstractItemView {{
     background-color: {COMFY_MENU_BG};
     color: {COMFY_TEXT_INPUT};
     border: 1px solid {COMFY_BORDER};
-    selection-background-color: {COMFY_ACCENT_BLUE};
+    selection-background-color: {COMFY_SURFACE_HOVER};
+    selection-color: {COMFY_TEXT_PRIMARY};
 }}
 
 QPushButton {{
@@ -365,14 +455,14 @@ QSlider::groove:horizontal {{
 }}
 QSlider::handle:horizontal {{
     background: {COMFY_TEXT_PRIMARY};
-    border: 1px solid {COMFY_BORDER};
+    border: 1px solid #909090;
     width: 12px;
     height: 12px;
     margin: -5px 0;
     border-radius: 6px;
 }}
 QSlider::sub-page:horizontal {{
-    background: {COMFY_ACCENT_BLUE};
+    background: #888888;
     border-radius: 2px;
 }}
 
@@ -383,29 +473,46 @@ QCheckBox {{
 QCheckBox::indicator {{
     width: 14px;
     height: 14px;
-    border-radius: 3px;
+    border-radius: 4px;
     border: 1px solid {COMFY_BORDER};
     background: {COMFY_INPUT_BG};
 }}
 QCheckBox::indicator:checked {{
-    background: {COMFY_ACCENT_BLUE};
-    border-color: {COMFY_ACCENT_BLUE_LIGHT};
+    background: #0078D4;
+    border-color: #32A6FF;
 }}
 
 QProgressBar {{
     background-color: {COMFY_INPUT_BG};
     border: 1px solid {COMFY_STROKE};
-    border-radius: 3px;
+    border-radius: 4px;
     text-align: right;
     color: {COMFY_TEXT_SECONDARY};
     height: 12px;
 }}
 QProgressBar::chunk {{
     background-color: {COMFY_ACCENT_GREEN};
-    border-radius: 2px;
+    border-radius: 3px;
 }}
 
-/* Inline ComfyUI Node Widgets hosted inside NodeItem proxy */
+QScrollBar:vertical {{
+    background: transparent;
+    width: 8px;
+    margin: 2px;
+}}
+QScrollBar::handle:vertical {{
+    background: {COMFY_SURFACE_HOVER};
+    border-radius: 4px;
+    min-height: 24px;
+}}
+QScrollBar::handle:vertical:hover {{
+    background: #666666;
+}}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+    height: 0px;
+}}
+
+/* Inline OneNote-Styled Node Widgets hosted inside NodeItem proxy */
 QWidget#NodeInlineWidgetRoot {{
     background-color: transparent;
 }}
@@ -426,6 +533,10 @@ QWidget#NodeInlineWidgetRoot QLineEdit {{
     padding: 2px 5px;
     font-size: 11px;
     min-height: 20px;
+}}
+QWidget#NodeInlineWidgetRoot QComboBox:hover,
+QWidget#NodeInlineWidgetRoot QLineEdit:focus {{
+    border-color: #9A9A9A;
 }}
 QWidget#NodeInlineWidgetRoot QPushButton {{
     background-color: {COMFY_SURFACE_ELEVATED};

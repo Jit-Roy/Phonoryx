@@ -13,9 +13,9 @@ import pytest
 from PySide6.QtCore import QMimeData, QPoint, QPointF, Qt
 from PySide6.QtGui import QDropEvent, QWheelEvent
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QMessageBox, QToolButton
+from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox, QToolButton
 
-from audioflow.engine_bridge import AudioFlowEngine, DataFlow, DeviceInfo, DeviceRoleHint, NodeType
+from audioflow.engine_bridge import AudioFlowEngine, DataFlow, DeviceInfo, DeviceRoleHint, NodeType, ProcessInfo
 from audioflow.models.graph_model import NODE_SPECS, NodeModel, ProjectModel
 from audioflow.ui.canvas import HEADER_HEIGHT, NODE_DRAG_MIME_TYPE, NODE_WIDTH
 from audioflow.ui.main_window import AudioFlowMainWindow
@@ -891,6 +891,228 @@ def test_comfyui_inline_node_widgets_selection_tabs_and_terminal(qapp, tmp_path:
         assert win.workflow_tabs.tabText(0) == "master_bus *"
     finally:
         win.close()
+
+
+def test_refresh_button_and_comfyui_node_resize(tmp_path):
+    qapp = QApplication.instance() or QApplication([])
+    cache_path = tmp_path / "workspace_cache.json"
+
+    win = AudioFlowMainWindow(cache_path=cache_path, restore_cache=False, auto_start=False)
+    try:
+        win.resize(1200, 760)
+        win.show()
+        qapp.processEvents()
+        canvas = win.canvas
+
+        n_mic = canvas.add_node_action(NodeType.MIC_INPUT, scene_pos=QPointF(100.0, 100.0))
+        n_vol = canvas.add_node_action(NodeType.VOLUME, scene_pos=QPointF(460.0, 100.0))
+        assert canvas.connect_ports_action(n_mic.id, 0, n_vol.id, 0)
+        qapp.processEvents()
+
+        # 1. Verify Refresh button enumerates live devices/processes & updates UI + logs
+        before_devs = win.left_panel.device_list.count()
+        before_procs = win.left_panel.proc_list.count()
+        before_cmb = canvas.node_items[n_mic.id].cmb_device.count()
+        fake_devs = list(win._devices) + [
+            DeviceInfo("dev-usb-test", "USB Test Mic", DataFlow.CAPTURE, DeviceRoleHint.MICROPHONE, 1, 48000, 2, False, False)
+        ]
+        fake_procs = list(win._processes) + [
+            ProcessInfo(98765, 1, "SpotifyTest.exe", r"C:\SpotifyTest.exe", "SpotifyTest", True, 0.4)
+        ]
+        win.engine.enumerate_devices = lambda: fake_devs
+        win.engine.enumerate_processes = lambda: fake_procs
+
+        win.btn_refresh.click()
+        qapp.processEvents()
+        assert win.left_panel.device_list.count() == before_devs + 1
+        assert win.left_panel.proc_list.count() == before_procs + 1
+        assert canvas.node_items[n_mic.id].cmb_device.count() == before_cmb + 1
+        assert win.bottom_panel.device_status_table.rowCount() == before_devs + 1
+        assert "Refreshed" in win.bottom_panel.log_console.toPlainText()
+
+        # 2. ComfyUI-style SE corner drag resizes node width & height, moves output ports & wire, and is undoable
+        canvas.fit_view()
+        qapp.processEvents()
+        mic_item = canvas.node_items[n_mic.id]
+        orig_w = mic_item._node_width()
+        orig_h = mic_item._compute_height()
+        conn = canvas.project.connections[0]
+        orig_wire_start_x = canvas.conn_items[conn].path().elementAt(0).x
+
+        se_local = QPointF(orig_w - 4.0, orig_h - 4.0)
+        se_vp = canvas.mapFromScene(mic_item.mapToScene(se_local))
+        target_vp = canvas.mapFromScene(mic_item.mapToScene(QPointF(orig_w + 90.0, orig_h + 60.0)))
+
+        QTest.mousePress(canvas.viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, se_vp)
+        QTest.mouseMove(canvas.viewport(), target_vp)
+        QTest.mouseRelease(canvas.viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, target_vp)
+        qapp.processEvents()
+
+        assert mic_item._node_width() > orig_w + 60.0
+        assert mic_item._compute_height() > orig_h + 40.0
+        assert mic_item.output_ports[0].x() == pytest.approx(mic_item._node_width())
+        assert canvas.conn_items[conn].path().elementAt(0).x > orig_wire_start_x + 60.0
+
+        # Shrinking past minimum size clamps cleanly to compute_min_size()
+        cur_w = mic_item._node_width()
+        cur_h = mic_item._compute_height()
+        min_w, min_h = mic_item.compute_min_size()
+        se_vp2 = canvas.mapFromScene(mic_item.mapToScene(QPointF(cur_w - 4.0, cur_h - 4.0)))
+        shrink_vp = canvas.mapFromScene(mic_item.mapToScene(QPointF(60.0, 40.0)))
+        QTest.mousePress(canvas.viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, se_vp2)
+        QTest.mouseMove(canvas.viewport(), shrink_vp)
+        QTest.mouseRelease(canvas.viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, shrink_vp)
+        qapp.processEvents()
+        assert mic_item._node_width() == pytest.approx(min_w)
+        assert mic_item._compute_height() == pytest.approx(min_h)
+
+        # Undo restores previous resized state cleanly in a single step
+        canvas.undo_stack.undo()
+        qapp.processEvents()
+        assert mic_item._node_width() > orig_w + 60.0
+
+        # Dragging NW corner expands top-left while keeping bottom-right edge anchored
+        old_x = mic_item.pos().x()
+        old_y = mic_item.pos().y()
+        old_right = old_x + mic_item._node_width()
+        old_bottom = old_y + mic_item._compute_height()
+        nw_vp = canvas.mapFromScene(mic_item.mapToScene(QPointF(3.0, 3.0)))
+        nw_target_vp = canvas.mapFromScene(mic_item.mapToScene(QPointF(-27.0, -17.0)))
+        QTest.mousePress(canvas.viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, nw_vp)
+        QTest.mouseMove(canvas.viewport(), nw_target_vp)
+        QTest.mouseRelease(canvas.viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, nw_target_vp)
+        qapp.processEvents()
+        assert mic_item.pos().x() < old_x - 20.0
+        assert mic_item.pos().y() < old_y - 10.0
+        assert (mic_item.pos().x() + mic_item._node_width()) == pytest.approx(old_right, abs=2.0)
+        assert (mic_item.pos().y() + mic_item._compute_height()) == pytest.approx(old_bottom, abs=2.0)
+
+        # Persistence check: save cache and reopen restores custom node size
+        win.save_workspace_cache()
+        expected_w = mic_item._node_width()
+        expected_h = mic_item._compute_height()
+    finally:
+        win.close()
+
+    win2 = AudioFlowMainWindow(cache_path=cache_path, restore_cache=True, auto_start=False)
+    try:
+        win2.show()
+        qapp.processEvents()
+        restored_item = win2.canvas.node_items[n_mic.id]
+        assert restored_item._node_width() == pytest.approx(expected_w)
+        assert restored_item._compute_height() == pytest.approx(expected_h)
+        # Resize-to-Fit restores default computed size
+        restored_item.setSelected(True)
+        win2.canvas.resize_selected_to_fit_action()
+        qapp.processEvents()
+        assert restored_item.model.width is None
+        assert restored_item._node_width() == pytest.approx(NODE_WIDTH)
+    finally:
+        win2.close()
+
+
+def test_save_location_and_node_resize_persist_across_restarts(qapp, monkeypatch, tmp_path: Path):
+    cache_path = tmp_path / "restart_save_cache.json"
+    project_file = tmp_path / "remembered_mix.aflow"
+    dialog_calls = []
+
+    def _fake_save_dialog(*args, **kwargs):
+        dialog_calls.append(args)
+        return str(project_file), "AudioFlow Project (*.aflow *.json)"
+
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", _fake_save_dialog)
+
+    # Session 1: resize a node via mouse drag, Ctrl+S once (prompts), edit & Ctrl+S again (no prompt), close
+    win1 = AudioFlowMainWindow(cache_path=cache_path, restore_cache=True, auto_start=False)
+    try:
+        win1.resize(1200, 760)
+        win1.show()
+        qapp.processEvents()
+        n_eq = win1.canvas.add_node_action(NodeType.EQUALIZER, scene_pos=QPointF(120.0, 90.0))
+        qapp.processEvents()
+        win1.canvas.fit_view()
+        qapp.processEvents()
+
+        eq_item = win1.canvas.node_items[n_eq.id]
+        orig_w = eq_item._node_width()
+        orig_h = eq_item._compute_height()
+        se_vp = win1.canvas.mapFromScene(eq_item.mapToScene(QPointF(orig_w - 4.0, orig_h - 4.0)))
+        drag_vp = win1.canvas.mapFromScene(eq_item.mapToScene(QPointF(orig_w + 110.0, orig_h + 70.0)))
+        QTest.mousePress(win1.canvas.viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, se_vp)
+        QTest.mouseMove(win1.canvas.viewport(), drag_vp)
+        QTest.mouseRelease(win1.canvas.viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, drag_vp)
+        qapp.processEvents()
+
+        resized_w = eq_item._node_width()
+        resized_h = eq_item._compute_height()
+        assert resized_w > orig_w + 80.0
+        assert resized_h > orig_h + 50.0
+
+        # First Ctrl+S asks once for location and saves cleanly
+        QTest.keyClick(win1.canvas, Qt.Key.Key_S, Qt.KeyboardModifier.ControlModifier)
+        qapp.processEvents()
+        assert len(dialog_calls) == 1
+        assert project_file.is_file()
+        assert win1.project_path == project_file
+        assert win1.workflow_tabs.tabText(0) == "remembered_mix"
+
+        # Further edit + second Ctrl+S saves directly without prompting again
+        n_vol = win1.canvas.add_node_action(NodeType.VOLUME, scene_pos=QPointF(520.0, 110.0))
+        assert win1.workflow_tabs.tabText(0) == "remembered_mix *"
+        QTest.keyClick(win1.canvas, Qt.Key.Key_S, Qt.KeyboardModifier.ControlModifier)
+        qapp.processEvents()
+        assert len(dialog_calls) == 1
+        assert win1.workflow_tabs.tabText(0) == "remembered_mix"
+
+        # Make another node resize in a 2nd workflow tab, switch back & close WITHOUT manual save_workspace_cache()
+        win1.btn_new_tab.click()
+        qapp.processEvents()
+        n_tab2 = win1.canvas.add_node_action(NodeType.GAIN, scene_pos=QPointF(140.0, 140.0))
+        win1.canvas.node_items[n_tab2.id].apply_geometry(140.0, 140.0, 350.0, 210.0)
+        win1.workflow_tabs.setCurrentIndex(0)
+        qapp.processEvents()
+    finally:
+        win1.close()
+
+    # Session 2: reopen app -> remembered file path, clean title, resized node size, and tab 2 resize all persist!
+    win2 = AudioFlowMainWindow(cache_path=cache_path, restore_cache=True, auto_start=False)
+    try:
+        win2.show()
+        qapp.processEvents()
+        assert win2.workflow_tabs.count() == 2
+        assert win2.workflow_tabs.currentIndex() == 0
+        assert win2.project_path == project_file
+        assert win2._tabs[0].file_path == project_file
+        assert win2.workflow_tabs.tabText(0) == "remembered_mix"
+
+        restored_eq = win2.canvas.node_items[n_eq.id]
+        assert restored_eq._node_width() == pytest.approx(resized_w)
+        assert restored_eq._compute_height() == pytest.approx(resized_h)
+
+        # Make an edit after reopening and hit Ctrl+S -> MUST NOT prompt for save location!
+        n_gain = win2.canvas.add_node_action(NodeType.GAIN, scene_pos=QPointF(520.0, 280.0), gain_db=4.5)
+        qapp.processEvents()
+        assert win2.workflow_tabs.tabText(0) == "remembered_mix *"
+        QTest.keyClick(win2.canvas, Qt.Key.Key_S, Qt.KeyboardModifier.ControlModifier)
+        qapp.processEvents()
+        assert len(dialog_calls) == 1
+        assert win2.workflow_tabs.tabText(0) == "remembered_mix"
+
+        saved_disk = json.loads(project_file.read_text(encoding="utf-8"))
+        saved_ids = {n["id"]: n for n in saved_disk["nodes"]}
+        assert n_gain.id in saved_ids
+        assert saved_ids[n_eq.id]["width"] == pytest.approx(resized_w)
+        assert saved_ids[n_eq.id]["height"] == pytest.approx(resized_h)
+
+        # Tab 2's resized node was preserved across restart too
+        win2.workflow_tabs.setCurrentIndex(1)
+        qapp.processEvents()
+        restored_tab2 = win2.canvas.node_items[n_tab2.id]
+        assert restored_tab2._node_width() == pytest.approx(350.0)
+        assert restored_tab2._compute_height() == pytest.approx(210.0)
+    finally:
+        win2.close()
+
 
 
 

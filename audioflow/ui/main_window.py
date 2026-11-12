@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from PySide6.QtCore import QEvent, Qt, QTimer
+from PySide6.QtCore import QEvent, QSize, Qt, QTimer
 from PySide6.QtGui import QAction, QKeySequence
 from shiboken6 import isValid
 from PySide6.QtWidgets import (
@@ -30,8 +30,15 @@ from PySide6.QtWidgets import (
 from audioflow.engine_bridge import AudioFlowEngine, DeviceInfo, ProcessInfo
 from audioflow.models.graph_model import NodeType, ProjectModel
 from audioflow.ui.canvas import NodeCanvas
+from audioflow.ui.icons import ui_icon, workflow_tab_icon
 from audioflow.ui.panels import BottomTelemetryPanel, LeftPalettePanel
-from audioflow.ui.theme import COMFY_STROKE, STUDIO_STYLESHEET
+from audioflow.ui.theme import (
+    COMFY_STROKE,
+    COMFY_TEXT_MUTED,
+    COMFY_TEXT_SECONDARY,
+    ONENOTE_SECTION_COLORS,
+    STUDIO_STYLESHEET,
+)
 
 DEFAULT_CACHE_PATH = Path.home() / ".audioflow" / "workspace_cache.json"
 
@@ -94,6 +101,7 @@ class AudioFlowMainWindow(QMainWindow):
     ) -> None:
         super().__init__()
         self.setWindowTitle("Untitled Workflow — AudioFlow Studio")
+        self.setWindowIcon(ui_icon("app_brand", 32))
         self.setMinimumSize(780, 500)
         self.resize(1380, 820)
         screen = QApplication.primaryScreen()
@@ -204,19 +212,19 @@ class AudioFlowMainWindow(QMainWindow):
         top_lay.setSpacing(6)
 
         # Actions (bound with global shortcuts so Ctrl+A / Ctrl+S / Ctrl+Z / Ctrl+Y / Ctrl+` always work)
-        self.act_new = QAction("New Workflow", self)
+        self.act_new = QAction(ui_icon("new_workflow", 16), "New Workflow", self)
         self.act_new.setShortcut(QKeySequence.StandardKey.New)
         self.act_new.triggered.connect(self.new_project_tab)
 
-        self.act_open = QAction("Open Workflow...", self)
+        self.act_open = QAction(ui_icon("open_file", 16), "Open Workflow...", self)
         self.act_open.setShortcut(QKeySequence.StandardKey.Open)
         self.act_open.triggered.connect(self.open_project_dialog)
 
-        self.act_save = QAction("Save Workflow", self)
+        self.act_save = QAction(ui_icon("save_file", 16), "Save Workflow", self)
         self.act_save.setShortcut(QKeySequence.StandardKey.Save)
         self.act_save.triggered.connect(self.save_project)
 
-        self.act_save_as = QAction("Save Workflow As...", self)
+        self.act_save_as = QAction(ui_icon("save_as", 16), "Save Workflow As...", self)
         self.act_save_as.setShortcut(QKeySequence("Ctrl+Shift+S"))
         self.act_save_as.triggered.connect(self.save_project_as_dialog)
 
@@ -227,52 +235,54 @@ class AudioFlowMainWindow(QMainWindow):
         )
 
         self.act_undo = self.canvas.undo_stack.createUndoAction(self, "Undo")
+        self.act_undo.setIcon(ui_icon("undo", 16))
         self.act_undo.setShortcut(QKeySequence.StandardKey.Undo)
 
         self.act_redo = self.canvas.undo_stack.createRedoAction(self, "Redo")
+        self.act_redo.setIcon(ui_icon("redo", 16))
         self.act_redo.setShortcuts([QKeySequence.StandardKey.Redo, QKeySequence("Ctrl+Shift+Z")])
 
-        self.act_select_all = QAction("Select All Nodes", self)
+        self.act_select_all = QAction(ui_icon("select_all", 16), "Select All Nodes", self)
         self.act_select_all.setShortcut(QKeySequence.StandardKey.SelectAll)
         self.act_select_all.triggered.connect(self.select_all_action)
 
-        self.act_group = QAction("Group Selected Nodes", self)
+        self.act_group = QAction(ui_icon("group", 16), "Group Selected Nodes", self)
         self.act_group.setShortcut(QKeySequence("Ctrl+G"))
         self.act_group.triggered.connect(lambda: self.canvas.group_selected_action())
 
-        self.act_delete = QAction("Delete Selected", self)
+        self.act_delete = QAction(ui_icon("delete", 16), "Delete Selected", self)
         self.act_delete.triggered.connect(self.canvas.delete_selected_action)
 
-        self.act_toggle_terminal = QAction("Meters, Status & Logs Terminal", self)
+        self.act_toggle_terminal = QAction(ui_icon("terminal", 16), "Meters, Status & Logs Terminal", self)
         self.act_toggle_terminal.setCheckable(True)
         self.act_toggle_terminal.setChecked(True)
         self.act_toggle_terminal.setShortcut(QKeySequence("Ctrl+`"))
         self.act_toggle_terminal.triggered.connect(self.set_terminal_visible)
 
-        self.act_toggle_palette = QAction("Node Palette Sidebar", self)
+        self.act_toggle_palette = QAction(ui_icon("palette", 16), "Node Palette Sidebar", self)
         self.act_toggle_palette.setCheckable(True)
         self.act_toggle_palette.setChecked(True)
         self.act_toggle_palette.triggered.connect(self.set_palette_visible)
 
-        self.act_zoom_in = QAction("Zoom In", self)
+        self.act_zoom_in = QAction(ui_icon("zoom_in", 16), "Zoom In", self)
         self.act_zoom_in.setShortcut(QKeySequence("Ctrl+="))
         self.act_zoom_in.triggered.connect(self.canvas.zoom_in)
 
-        self.act_zoom_out = QAction("Zoom Out", self)
+        self.act_zoom_out = QAction(ui_icon("zoom_out", 16), "Zoom Out", self)
         self.act_zoom_out.setShortcut(QKeySequence("Ctrl+-"))
         self.act_zoom_out.triggered.connect(self.canvas.zoom_out)
 
-        self.act_zoom_reset = QAction("Reset View", self)
+        self.act_zoom_reset = QAction(ui_icon("zoom_fit", 16), "Reset View", self)
         self.act_zoom_reset.setShortcut(QKeySequence("Ctrl+0"))
         self.act_zoom_reset.triggered.connect(self.canvas.fit_view)
 
-        self.act_engine_toggle = QAction("Start Audio Engine", self)
+        self.act_engine_toggle = QAction(ui_icon("play", 16), "Start Audio Engine", self)
         self.act_engine_toggle.setCheckable(True)
         self.act_engine_toggle.triggered.connect(self._toggle_engine)
 
-        self.act_refresh = QAction("Refresh Devices & Processes", self)
+        self.act_refresh = QAction(ui_icon("refresh", 16), "Refresh Devices & Processes", self)
         self.act_refresh.setShortcut(QKeySequence("F5"))
-        self.act_refresh.triggered.connect(self.refresh_devices_and_processes)
+        self.act_refresh.triggered.connect(lambda: self.refresh_devices_and_processes(log_feedback=True))
 
         # Compact inline menu bar on left of ComfyUI top bar
         self.menu_bar = QMenuBar(self.top_bar)
@@ -323,6 +333,7 @@ class AudioFlowMainWindow(QMainWindow):
         self.workflow_tabs.setMovable(True)
         self.workflow_tabs.setExpanding(False)
         self.workflow_tabs.setDrawBase(False)
+        self.workflow_tabs.setIconSize(QSize(14, 14))
         self.workflow_tabs.setElideMode(Qt.TextElideMode.ElideRight)
         self._add_workflow_tab_item(self._tabs[0])
         self.workflow_tabs.currentChanged.connect(self._on_workflow_tab_changed)
@@ -344,7 +355,8 @@ class AudioFlowMainWindow(QMainWindow):
         # ComfyUI Right Action Cluster (compact Undo / Redo / Save / Refresh + primary Run button)
         self.btn_undo = QToolButton(self.top_bar)
         self.btn_undo.setObjectName("ComfyIconBtn")
-        self.btn_undo.setText("↶")
+        self.btn_undo.setIcon(ui_icon("undo", 15))
+        self.btn_undo.setIconSize(QSize(15, 15))
         self.btn_undo.setToolTip("Undo (Ctrl+Z)")
         self.btn_undo.setEnabled(False)
         self.btn_undo.clicked.connect(self.canvas.undo_stack.undo)
@@ -352,7 +364,8 @@ class AudioFlowMainWindow(QMainWindow):
 
         self.btn_redo = QToolButton(self.top_bar)
         self.btn_redo.setObjectName("ComfyIconBtn")
-        self.btn_redo.setText("↷")
+        self.btn_redo.setIcon(ui_icon("redo", 15))
+        self.btn_redo.setIconSize(QSize(15, 15))
         self.btn_redo.setToolTip("Redo (Ctrl+Y)")
         self.btn_redo.setEnabled(False)
         self.btn_redo.clicked.connect(self.canvas.undo_stack.redo)
@@ -360,6 +373,9 @@ class AudioFlowMainWindow(QMainWindow):
 
         self.btn_save = QToolButton(self.top_bar)
         self.btn_save.setObjectName("ComfyIconBtn")
+        self.btn_save.setIcon(ui_icon("save_file", 15))
+        self.btn_save.setIconSize(QSize(15, 15))
+        self.btn_save.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self.btn_save.setText("Save")
         self.btn_save.setToolTip("Save Workflow (Ctrl+S)")
         self.btn_save.clicked.connect(self.save_project)
@@ -367,13 +383,18 @@ class AudioFlowMainWindow(QMainWindow):
 
         self.btn_refresh = QToolButton(self.top_bar)
         self.btn_refresh.setObjectName("ComfyIconBtn")
+        self.btn_refresh.setIcon(ui_icon("refresh", 15))
+        self.btn_refresh.setIconSize(QSize(15, 15))
+        self.btn_refresh.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self.btn_refresh.setText("Refresh")
         self.btn_refresh.setToolTip("Refresh Windows Audio Devices & Processes (F5)")
-        self.btn_refresh.clicked.connect(self.refresh_devices_and_processes)
+        self.btn_refresh.clicked.connect(lambda: self.refresh_devices_and_processes(log_feedback=True))
         top_lay.addWidget(self.btn_refresh)
 
-        self.btn_engine = QPushButton("▶ Run", self.top_bar)
+        self.btn_engine = QPushButton(" Run", self.top_bar)
         self.btn_engine.setObjectName("ComfyRunButton")
+        self.btn_engine.setIcon(ui_icon("play_btn", 14))
+        self.btn_engine.setIconSize(QSize(14, 14))
         self.btn_engine.setProperty("running", False)
         self.btn_engine.setToolTip("Start / Stop Real-Time Audio Engine")
         self.btn_engine.clicked.connect(self._on_run_button_clicked)
@@ -410,7 +431,10 @@ class AudioFlowMainWindow(QMainWindow):
 
         self.btn_status_terminal = QToolButton(strip)
         self.btn_status_terminal.setObjectName("TerminalToggleBtn")
-        self.btn_status_terminal.setText(">_ Terminal")
+        self.btn_status_terminal.setIcon(ui_icon("terminal", 14))
+        self.btn_status_terminal.setIconSize(QSize(14, 14))
+        self.btn_status_terminal.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.btn_status_terminal.setText("Terminal")
         self.btn_status_terminal.setCheckable(True)
         self.btn_status_terminal.setChecked(True)
         self.btn_status_terminal.setToolTip("Open / Close Meters, Status & Logs Terminal (Ctrl+`)")
@@ -419,6 +443,9 @@ class AudioFlowMainWindow(QMainWindow):
 
         self.btn_status_palette = QToolButton(strip)
         self.btn_status_palette.setObjectName("TerminalToggleBtn")
+        self.btn_status_palette.setIcon(ui_icon("palette", 14))
+        self.btn_status_palette.setIconSize(QSize(14, 14))
+        self.btn_status_palette.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self.btn_status_palette.setText("Node Palette")
         self.btn_status_palette.setCheckable(True)
         self.btn_status_palette.setChecked(True)
@@ -427,12 +454,12 @@ class AudioFlowMainWindow(QMainWindow):
         lay.addWidget(self.btn_status_palette)
 
         self.lbl_status_engine = QLabel("Engine Stopped", strip)
-        self.lbl_status_engine.setStyleSheet("color: #999999; font-size: 11px;")
+        self.lbl_status_engine.setStyleSheet(f"color: {COMFY_TEXT_SECONDARY}; font-size: 11px;")
         lay.addWidget(self.lbl_status_engine)
         lay.addStretch(1)
 
         self.lbl_status_hint = QLabel("Ctrl+A Select All  •  Ctrl+Click Multi-Select  •  Ctrl+S Save", strip)
-        self.lbl_status_hint.setStyleSheet("color: #777777; font-size: 11px;")
+        self.lbl_status_hint.setStyleSheet(f"color: {COMFY_TEXT_MUTED}; font-size: 11px;")
         lay.addWidget(self.lbl_status_hint)
 
         sb = self.statusBar()
@@ -671,11 +698,15 @@ class AudioFlowMainWindow(QMainWindow):
             self._update_undo_redo_buttons()
         finally:
             self._switching_tabs = False
+        if not self._restoring_cache:
+            self.schedule_cache_save()
 
     def _on_workflow_tab_moved(self, from_idx: int, to_idx: int) -> None:
         if 0 <= from_idx < len(self._tabs) and 0 <= to_idx < len(self._tabs):
             tab = self._tabs.pop(from_idx)
             self._tabs.insert(to_idx, tab)
+            if not self._restoring_cache:
+                self.schedule_cache_save()
 
     def _begin_tab_rename(self, idx: int) -> None:
         if not (0 <= idx < len(self._tabs)):
@@ -688,9 +719,9 @@ class AudioFlowMainWindow(QMainWindow):
         tab = self._tabs[idx]
         target_tab_id = tab.tab_id
         editor = _TabRenameLineEdit(tab.base_title(), self.workflow_tabs)
-        editor.setGeometry(self.workflow_tabs.tabRect(idx).adjusted(4, 3, -24, -4))
+        editor.setGeometry(self.workflow_tabs.tabRect(idx).adjusted(22, 3, -24, -4))
         editor.setStyleSheet(
-            "background-color: #222222; color: #FFFFFF; border: 1px solid #31B9F4; "
+            "background-color: #161616; color: #FFFFFF; border: 1px solid #32A6FF; "
             "border-radius: 4px; padding: 0px 4px; font-size: 12px;"
         )
         self._tab_rename_editor = editor
@@ -746,12 +777,15 @@ class AudioFlowMainWindow(QMainWindow):
                     self.project_path = target
         tab.title = clean
         self._refresh_tab_title(idx)
-        if idx == self.workflow_tabs.currentIndex():
-            self.schedule_cache_save()
+        self.schedule_cache_save()
+        if tab.file_path is not None and self._persist_cache:
+            self._cache_dirty = True
+            self.save_workspace_cache()
         return True
 
     def _add_workflow_tab_item(self, tab: WorkflowTabState) -> int:
-        idx = self.workflow_tabs.addTab(tab.display_title())
+        accent = ONENOTE_SECTION_COLORS[(tab.tab_id - 1) % len(ONENOTE_SECTION_COLORS)]
+        idx = self.workflow_tabs.addTab(workflow_tab_icon(accent, 14), tab.display_title())
         close_btn = QToolButton(self.workflow_tabs)
         close_btn.setObjectName("TerminalCloseButton")
         close_btn.setText("×")
@@ -761,6 +795,18 @@ class AudioFlowMainWindow(QMainWindow):
         close_btn.clicked.connect(lambda _=False, t=tab: self._close_tab_by_id(t.tab_id))
         self.workflow_tabs.setTabButton(idx, QTabBar.ButtonPosition.RightSide, close_btn)
         return idx
+
+    def _rebuild_workflow_tab_bar(self, active_idx: int) -> None:
+        self.workflow_tabs.blockSignals(True)
+        try:
+            while self.workflow_tabs.count() > 0:
+                self.workflow_tabs.removeTab(0)
+            for tab in self._tabs:
+                self._add_workflow_tab_item(tab)
+            if 0 <= active_idx < len(self._tabs):
+                self.workflow_tabs.setCurrentIndex(active_idx)
+        finally:
+            self.workflow_tabs.blockSignals(False)
 
     def _close_tab_by_id(self, tab_id: int) -> None:
         for i, t in enumerate(self._tabs):
@@ -776,6 +822,8 @@ class AudioFlowMainWindow(QMainWindow):
         self._tabs.append(tab)
         new_idx = self._add_workflow_tab_item(tab)
         self.workflow_tabs.setCurrentIndex(new_idx)
+        if not self._restoring_cache:
+            self.schedule_cache_save()
         return new_idx
 
     def close_workflow_tab(self, idx: int) -> None:
@@ -787,6 +835,8 @@ class AudioFlowMainWindow(QMainWindow):
         self._tabs.pop(idx)
         self.workflow_tabs.removeTab(idx)
         self._sync_window_title()
+        if not self._restoring_cache:
+            self.schedule_cache_save()
 
     def select_all_action(self) -> None:
         fw = QApplication.focusWidget()
@@ -808,21 +858,33 @@ class AudioFlowMainWindow(QMainWindow):
 
     # ----- Engine / Catalog -----
 
-    def refresh_devices_and_processes(self) -> None:
+    def refresh_devices_and_processes(self, log_feedback: bool = False) -> None:
         self._devices = self.engine.enumerate_devices()
         self._processes = self.engine.enumerate_processes()
         self._last_device_seq = self.engine.device_change_seq()
 
         avail_ids = {d.id for d in self._devices}
+        avail_changed = False
         for node in self.project.nodes.values():
             if node.device_id:
-                node.device_available = node.device_id in avail_ids
+                now_avail = node.device_id in avail_ids
+                if node.device_available != now_avail:
+                    avail_changed = True
+                node.device_available = now_avail
 
         self.left_panel.set_devices(self._devices)
         self.left_panel.set_processes(self._processes)
         self.canvas.update_catalog(self._devices, self._processes)
         self.bottom_panel.update_devices_table(self._devices)
         self.bottom_panel.push_native_logs(self.engine.poll_logs())
+        if avail_changed and self.engine.is_running:
+            self.sync_graph_to_engine()
+        if log_feedback:
+            audio_active = sum(1 for p in self._processes if p.has_audio_session)
+            self.bottom_panel.append_log(
+                "INFO",
+                f"Refreshed {len(self._devices)} audio devices and {len(self._processes)} processes ({audio_active} with active audio sessions).",
+            )
 
     def _on_run_button_clicked(self) -> None:
         self._toggle_engine(not self.act_engine_toggle.isChecked())
@@ -830,10 +892,12 @@ class AudioFlowMainWindow(QMainWindow):
     def _sync_run_button(self, running: bool) -> None:
         self.act_engine_toggle.blockSignals(True)
         self.act_engine_toggle.setChecked(running)
+        self.act_engine_toggle.setIcon(ui_icon("stop" if running else "play", 16))
         self.act_engine_toggle.setText("Stop Audio Engine" if running else "Start Audio Engine")
         self.act_engine_toggle.blockSignals(False)
 
-        self.btn_engine.setText("■ Stop" if running else "▶ Run")
+        self.btn_engine.setIcon(ui_icon("stop_btn" if running else "play_btn", 14))
+        self.btn_engine.setText(" Stop" if running else " Run")
         self.btn_engine.setProperty("running", running)
         self.btn_engine.style().unpolish(self.btn_engine)
         self.btn_engine.style().polish(self.btn_engine)
@@ -909,6 +973,15 @@ class AudioFlowMainWindow(QMainWindow):
             self._cache_dirty = True
             self._cache_timer.start()
 
+    @staticmethod
+    def _restore_cached_file_path(raw_path: Any) -> Optional[Path]:
+        if not isinstance(raw_path, str) or not raw_path.strip():
+            return None
+        candidate = Path(raw_path.strip())
+        if candidate.is_file() or candidate.parent.is_dir():
+            return candidate
+        return None
+
     def save_workspace_cache(self) -> None:
         if not self._persist_cache:
             return
@@ -921,9 +994,33 @@ class AudioFlowMainWindow(QMainWindow):
                         bak.write_text(existing, encoding="utf-8")
                 except OSError:
                     pass
+            active_idx = self.workflow_tabs.currentIndex()
+            if not (0 <= active_idx < len(self._tabs)):
+                active_idx = 0
+            active_tab = self._tabs[active_idx]
+            active_tab.project = self.project
+            active_tab.file_path = self.project_path
+            active_view = self.canvas.get_view_state()
+            active_tab.view_state = dict(active_view)
+
             data = self.project.to_project_dict()
-            data["viewport"] = self.canvas.get_view_state()
-            data["workflow_title"] = self._active_tab().title
+            data["viewport"] = active_view
+            data["workflow_title"] = active_tab.title
+            data["project_path"] = (
+                str(active_tab.file_path) if active_tab.file_path is not None else None
+            )
+            data["dirty"] = bool(active_tab.dirty)
+            data["active_tab_index"] = int(active_idx)
+            data["tabs"] = [
+                {
+                    "title": t.title,
+                    "file_path": str(t.file_path) if t.file_path is not None else None,
+                    "dirty": bool(t.dirty),
+                    "view_state": t.view_state,
+                    "project": t.project.to_project_dict(),
+                }
+                for t in self._tabs
+            ]
             data["ui"] = self._collect_ui_state()
             self.cache_path.parent.mkdir(parents=True, exist_ok=True)
             self.cache_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
@@ -939,24 +1036,86 @@ class AudioFlowMainWindow(QMainWindow):
         try:
             avail_ids = {d.id for d in self._devices}
             raw = json.loads(self.cache_path.read_text(encoding="utf-8"))
-            missing = self.project.load_project_dict(raw, available_device_ids=avail_ids)
+            vp = raw.get("viewport")
+            raw_tabs = raw.get("tabs")
+            missing: List[Any] = []
+
+            if isinstance(raw_tabs, list) and raw_tabs:
+                restored_tabs: List[WorkflowTabState] = []
+                for pos_idx, entry in enumerate(raw_tabs):
+                    if not isinstance(entry, dict):
+                        continue
+                    proj = ProjectModel()
+                    proj_dict = entry.get("project")
+                    if not isinstance(proj_dict, dict):
+                        proj_dict = raw
+                    tab_missing = proj.load_project_dict(proj_dict, available_device_ids=avail_ids)
+                    rest_path = self._restore_cached_file_path(entry.get("file_path"))
+                    raw_title = entry.get("title")
+                    title = (
+                        raw_title.strip()
+                        if isinstance(raw_title, str) and raw_title.strip()
+                        else f"Untitled Workflow {pos_idx + 1}"
+                    )
+                    vp_raw = entry.get("view_state")
+                    tab_vp = dict(vp_raw) if isinstance(vp_raw, dict) else None
+                    tab_dirty = bool(entry.get("dirty", False)) and rest_path is not None
+                    self._next_tab_seq += 1
+                    restored_tabs.append(
+                        WorkflowTabState(
+                            tab_id=self._next_tab_seq,
+                            title=title,
+                            project=proj,
+                            file_path=rest_path,
+                            dirty=tab_dirty,
+                            view_state=tab_vp,
+                        )
+                    )
+                    missing.extend(tab_missing)
+
+                if restored_tabs:
+                    try:
+                        active_idx = int(raw.get("active_tab_index", 0))
+                    except (TypeError, ValueError):
+                        active_idx = 0
+                    active_idx = max(0, min(len(restored_tabs) - 1, active_idx))
+                    self._tabs = restored_tabs
+                    self._rebuild_workflow_tab_bar(active_idx)
+                    active_tab = self._tabs[active_idx]
+                    self._active_tab_id = active_tab.tab_id
+                    self.project = active_tab.project
+                    self.project_path = active_tab.file_path
+                    self.canvas.project = self.project
+                    if active_tab.view_state is None and isinstance(vp, dict):
+                        active_tab.view_state = dict(vp)
+                    vp = active_tab.view_state
+                else:
+                    missing = self.project.load_project_dict(raw, available_device_ids=avail_ids)
+            else:
+                missing = self.project.load_project_dict(raw, available_device_ids=avail_ids)
+                rest_path = self._restore_cached_file_path(raw.get("project_path"))
+                self.project_path = rest_path
+                idx = self.workflow_tabs.currentIndex()
+                if 0 <= idx < len(self._tabs):
+                    saved_title = raw.get("workflow_title")
+                    if isinstance(saved_title, str) and saved_title.strip():
+                        self._tabs[idx].title = saved_title.strip()
+                    self._tabs[idx].file_path = rest_path
+                    self._tabs[idx].dirty = bool(raw.get("dirty", False)) and rest_path is not None
+                    self._tabs[idx].view_state = dict(vp) if isinstance(vp, dict) else None
+
             self.canvas.rebuild_from_project()
             self.canvas.update_catalog(self._devices, self._processes)
-            vp = raw.get("viewport")
             if isinstance(vp, dict):
                 self.canvas.set_view_state(vp)
             ui_state = raw.get("ui")
             if isinstance(ui_state, dict):
                 self._restore_ui_state(ui_state)
             self.sync_graph_to_engine()
-            idx = self.workflow_tabs.currentIndex()
-            if 0 <= idx < len(self._tabs):
-                saved_title = raw.get("workflow_title")
-                if isinstance(saved_title, str) and saved_title.strip():
-                    self._tabs[idx].title = saved_title.strip()
-                self._tabs[idx].dirty = False
-                self._tabs[idx].view_state = dict(vp) if isinstance(vp, dict) else None
-                self._refresh_tab_title(idx)
+            for i in range(len(self._tabs)):
+                self._refresh_tab_title(i)
+            self._sync_window_title()
+            self._update_undo_redo_buttons()
             if missing:
                 self.bottom_panel.append_log(
                     "WARN",
@@ -993,30 +1152,30 @@ class AudioFlowMainWindow(QMainWindow):
         finally:
             self._switching_tabs = False
 
+    def _save_to_path(self, target: Path) -> None:
+        self.project_path = target
+        self.project.save_file(target)
+        idx = self.workflow_tabs.currentIndex()
+        if 0 <= idx < len(self._tabs):
+            self._tabs[idx].file_path = target
+            self._tabs[idx].dirty = False
+            self._refresh_tab_title(idx)
+        self.lbl_status_engine.setText(f"Saved {target.name}")
+        if self._persist_cache:
+            self._cache_dirty = True
+            self.save_workspace_cache()
+
     def save_project(self) -> None:
         if self.project_path is None:
             self.save_project_as_dialog()
             return
-        self.project.save_file(self.project_path)
-        idx = self.workflow_tabs.currentIndex()
-        if 0 <= idx < len(self._tabs):
-            self._tabs[idx].file_path = self.project_path
-            self._tabs[idx].dirty = False
-            self._refresh_tab_title(idx)
-        self.lbl_status_engine.setText(f"Saved {self.project_path.name}")
+        self._save_to_path(self.project_path)
 
     def save_project_as_dialog(self) -> None:
         path, _ = QFileDialog.getSaveFileName(self, "Save AudioFlow Project", "", "AudioFlow Project (*.aflow *.json)")
         if not path:
             return
-        self.project_path = Path(path)
-        self.project.save_file(self.project_path)
-        idx = self.workflow_tabs.currentIndex()
-        if 0 <= idx < len(self._tabs):
-            self._tabs[idx].file_path = self.project_path
-            self._tabs[idx].dirty = False
-            self._refresh_tab_title(idx)
-        self.lbl_status_engine.setText(f"Saved {self.project_path.name}")
+        self._save_to_path(Path(path))
 
     def open_project_dialog(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "Open AudioFlow Project", "", "AudioFlow Project (*.aflow *.json)")
@@ -1038,7 +1197,9 @@ class AudioFlowMainWindow(QMainWindow):
             self.canvas.rebuild_from_project()
             self.canvas.update_catalog(self._devices, self._processes)
             self.sync_graph_to_engine()
-            self.schedule_cache_save()
+            if self._persist_cache:
+                self._cache_dirty = True
+                self.save_workspace_cache()
         finally:
             self._switching_tabs = False
 

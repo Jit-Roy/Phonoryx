@@ -184,6 +184,8 @@ class NodeModel:
     sample_rate: int = 48000
     channels: int = 2
     group_id: Optional[int] = None
+    width: Optional[float] = None
+    height: Optional[float] = None
 
     def spec(self) -> NodeSpec:
         return NODE_SPECS[self.node_type]
@@ -206,7 +208,7 @@ class NodeModel:
         }
 
     def to_project_dict(self) -> dict:
-        return {
+        data = {
             "id": int(self.id),
             "type": int(self.node_type),
             "type_name": self.node_type.name,
@@ -227,6 +229,11 @@ class NodeModel:
             "channels": int(self.channels),
             "group_id": self.group_id,
         }
+        if self.width is not None:
+            data["width"] = float(self.width)
+        if self.height is not None:
+            data["height"] = float(self.height)
+        return data
 
     @classmethod
     def from_project_dict(cls, raw: dict) -> "NodeModel":
@@ -263,6 +270,8 @@ class NodeModel:
             sample_rate=int(raw.get("sample_rate", 48000)),
             channels=int(raw.get("channels", 2)),
             group_id=raw.get("group_id"),
+            width=float(raw["width"]) if raw.get("width") is not None else None,
+            height=float(raw["height"]) if raw.get("height") is not None else None,
         )
 
 
