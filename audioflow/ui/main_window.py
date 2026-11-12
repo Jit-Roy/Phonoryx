@@ -5,9 +5,9 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QEvent, Qt, QTimer
 from PySide6.QtGui import QAction, QKeySequence
 from shiboken6 import isValid
 from PySide6.QtWidgets import (
@@ -102,6 +102,14 @@ class AudioFlowMainWindow(QMainWindow):
         self._restoring_cache = False
         self._switching_tabs = False
         self._closing = False
+        self._ui_ready = False
+        self._shown_once = False
+        self._cached_palette_width = 260
+        self._cached_terminal_height = 210
+        self._palette_visible = True
+        self._terminal_visible = True
+        self._pending_ui_restore: Optional[Dict[str, Any]] = None
+        self._baseline_ui_state: Optional[Dict[str, Any]] = None
         self._next_tab_seq = 1
 
         self.project = ProjectModel()
@@ -155,8 +163,8 @@ class AudioFlowMainWindow(QMainWindow):
         empty_left_title.setFixedHeight(0)
         self.left_dock.setTitleBarWidget(empty_left_title)
         self.left_dock.setWidget(self.left_panel)
-        self.left_dock.setMinimumWidth(220)
-        self.left_dock.setMaximumWidth(340)
+        self.left_dock.setMinimumWidth(200)
+        self.left_dock.setMaximumWidth(560)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.left_dock)
 
         self.bottom_dock = QDockWidget("Meters, Status & Logs", self)
@@ -165,9 +173,17 @@ class AudioFlowMainWindow(QMainWindow):
         empty_title.setFixedHeight(0)
         self.bottom_dock.setTitleBarWidget(empty_title)
         self.bottom_dock.setWidget(self.bottom_panel)
-        self.bottom_dock.setMinimumHeight(140)
-        self.bottom_dock.setMaximumHeight(420)
+        self.bottom_dock.setMinimumHeight(120)
+        self.bottom_dock.setMaximumHeight(560)
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.bottom_dock)
+
+        self.resizeDocks([self.left_dock], [self._cached_palette_width], Qt.Orientation.Horizontal)
+        self.resizeDocks([self.bottom_dock], [self._cached_terminal_height], Qt.Orientation.Vertical)
+        self.left_dock.installEventFilter(self)
+        self.bottom_dock.installEventFilter(self)
+        app = QApplication.instance()
+        if isinstance(app, QApplication):
+            app.installEventFilter(self)
 
     def _build_topbar_and_menus(self) -> None:
         self.top_bar = QWidget(self)
@@ -419,8 +435,10 @@ class AudioFlowMainWindow(QMainWindow):
         self.left_panel.close_requested.connect(lambda: self.set_palette_visible(False))
 
         self.bottom_panel.close_requested.connect(lambda: self.set_terminal_visible(False))
-        self.bottom_dock.visibilityChanged.connect(self._sync_terminal_toggle_state)
-        self.left_dock.visibilityChanged.connect(self._sync_palette_toggle_state)
+        self.bottom_dock.visibilityChanged.connect(self._on_terminal_dock_visibility)
+        self.left_dock.visibilityChanged.connect(self._on_palette_dock_visibility)
+        self.left_panel.tabs.currentChanged.connect(lambda _idx: self._on_ui_state_changed())
+        self.bottom_panel.tabs.currentChanged.connect(lambda _idx: self._on_ui_state_changed())
 
         self.canvas.graph_changed.connect(self.sync_graph_to_engine)
         self.canvas.workspace_modified.connect(self._on_canvas_workspace_modified)
@@ -436,11 +454,31 @@ class AudioFlowMainWindow(QMainWindow):
 
     # ----- Bottom Terminal & Palette Open/Close -----
 
+    def _on_ui_state_changed(self) -> None:
+        if self._ui_ready and not self._closing and not self._restoring_cache:
+            self.schedule_cache_save()
+
+    def _on_palette_dock_visibility(self, visible: bool) -> None:
+        self._sync_palette_toggle_state(visible)
+        if not self._closing and not self._restoring_cache:
+            self._palette_visible = bool(visible)
+            self._on_ui_state_changed()
+
+    def _on_terminal_dock_visibility(self, visible: bool) -> None:
+        self._sync_terminal_toggle_state(visible)
+        if not self._closing and not self._restoring_cache:
+            self._terminal_visible = bool(visible)
+            self._on_ui_state_changed()
+
     def set_palette_visible(self, visible: bool) -> None:
+        if not self._closing and not self._restoring_cache:
+            self._palette_visible = bool(visible)
         self.left_dock.setVisible(visible)
         if visible:
             self.left_dock.raise_()
+            self.resizeDocks([self.left_dock], [self._cached_palette_width], Qt.Orientation.Horizontal)
         self._sync_palette_toggle_state(visible)
+        self._on_ui_state_changed()
 
     def toggle_palette_panel(self) -> None:
         self.set_palette_visible(not self.left_dock.isVisible())
@@ -452,10 +490,14 @@ class AudioFlowMainWindow(QMainWindow):
             ctrl.blockSignals(False)
 
     def set_terminal_visible(self, visible: bool) -> None:
+        if not self._closing and not self._restoring_cache:
+            self._terminal_visible = bool(visible)
         self.bottom_dock.setVisible(visible)
         if visible:
             self.bottom_dock.raise_()
+            self.resizeDocks([self.bottom_dock], [self._cached_terminal_height], Qt.Orientation.Vertical)
         self._sync_terminal_toggle_state(visible)
+        self._on_ui_state_changed()
 
     def toggle_terminal_panel(self) -> None:
         self.set_terminal_visible(not self.bottom_dock.isVisible())
@@ -465,6 +507,105 @@ class AudioFlowMainWindow(QMainWindow):
             ctrl.blockSignals(True)
             ctrl.setChecked(visible)
             ctrl.blockSignals(False)
+
+    def _collect_ui_state(self) -> Dict[str, Any]:
+        is_max = bool(self.isMaximized())
+        ng = self.normalGeometry()
+        geom = (
+            ng
+            if (is_max and ng.isValid() and ng.width() >= 200 and ng.height() >= 200)
+            else self.geometry()
+        )
+        if not self._closing:
+            if self._palette_visible and self.left_dock.isVisible() and self.left_dock.width() > 0:
+                self._cached_palette_width = max(200, int(self.left_dock.width()))
+            if self._terminal_visible and self.bottom_dock.isVisible() and self.bottom_dock.height() > 0:
+                self._cached_terminal_height = max(120, int(self.bottom_dock.height()))
+        return {
+            "window_x": int(geom.x()),
+            "window_y": int(geom.y()),
+            "window_width": int(geom.width()),
+            "window_height": int(geom.height()),
+            "window_maximized": is_max,
+            "palette_visible": bool(self._palette_visible),
+            "palette_width": int(self._cached_palette_width),
+            "palette_tab": int(self.left_panel.tabs.currentIndex()),
+            "terminal_visible": bool(self._terminal_visible),
+            "terminal_height": int(self._cached_terminal_height),
+            "terminal_tab": int(self.bottom_panel.tabs.currentIndex()),
+        }
+
+    def _apply_pending_ui_restore(self, include_maximized: bool = False) -> None:
+        ui = self._pending_ui_restore
+        if not isinstance(ui, dict):
+            return
+        self._restoring_cache = True
+        try:
+            self.left_dock.setVisible(bool(ui["palette_visible"]))
+            self._sync_palette_toggle_state(bool(ui["palette_visible"]))
+            self.bottom_dock.setVisible(bool(ui["terminal_visible"]))
+            self._sync_terminal_toggle_state(bool(ui["terminal_visible"]))
+            self.resizeDocks([self.left_dock], [int(ui["palette_width"])], Qt.Orientation.Horizontal)
+            self.resizeDocks([self.bottom_dock], [int(ui["terminal_height"])], Qt.Orientation.Vertical)
+            if include_maximized and ui.get("window_maximized"):
+                self.setWindowState(self.windowState() | Qt.WindowState.WindowMaximized)
+        finally:
+            self._restoring_cache = False
+
+    def _finalize_initial_ui(self) -> None:
+        if self._closing:
+            return
+        if self._pending_ui_restore is not None:
+            self._apply_pending_ui_restore(include_maximized=True)
+            self._pending_ui_restore = None
+        self._baseline_ui_state = self._collect_ui_state()
+        self._ui_ready = True
+
+    def _restore_ui_state(self, ui: Dict[str, Any]) -> None:
+        if not isinstance(ui, dict):
+            return
+        screen = QApplication.primaryScreen()
+        avail = screen.availableGeometry() if screen is not None else None
+        try:
+            w = max(780, int(ui.get("window_width", self.width())))
+            h = max(500, int(ui.get("window_height", self.height())))
+            x = int(ui.get("window_x", self.x()))
+            y = int(ui.get("window_y", self.y()))
+            if avail is not None:
+                w = min(w, avail.width())
+                h = min(h, avail.height())
+                x = max(avail.left(), min(x, avail.right() - min(w, 240)))
+                y = max(avail.top(), min(y, avail.bottom() - min(h, 180)))
+            self.setGeometry(x, y, w, h)
+        except (TypeError, ValueError):
+            pass
+
+        pal_vis = bool(ui.get("palette_visible", True))
+        term_vis = bool(ui.get("terminal_visible", True))
+        pal_w = max(200, min(560, int(ui.get("palette_width", self._cached_palette_width))))
+        term_h = max(120, min(560, int(ui.get("terminal_height", self._cached_terminal_height))))
+        pal_tab = int(ui.get("palette_tab", 0))
+        term_tab = int(ui.get("terminal_tab", 0))
+        is_max = bool(ui.get("window_maximized", False))
+
+        self._palette_visible = pal_vis
+        self._terminal_visible = term_vis
+        self._cached_palette_width = pal_w
+        self._cached_terminal_height = term_h
+
+        if 0 <= pal_tab < self.left_panel.tabs.count():
+            self.left_panel.tabs.setCurrentIndex(pal_tab)
+        if 0 <= term_tab < self.bottom_panel.tabs.count():
+            self.bottom_panel.tabs.setCurrentIndex(term_tab)
+
+        self._pending_ui_restore = {
+            "window_maximized": is_max,
+            "palette_visible": pal_vis,
+            "palette_width": pal_w,
+            "terminal_visible": term_vis,
+            "terminal_height": term_h,
+        }
+        self._apply_pending_ui_restore(include_maximized=is_max)
 
     # ----- Workflow Tabs & Dirty (*) State -----
 
@@ -771,8 +912,10 @@ class AudioFlowMainWindow(QMainWindow):
             data = self.project.to_project_dict()
             data["viewport"] = self.canvas.get_view_state()
             data["workflow_title"] = self._active_tab().title
+            data["ui"] = self._collect_ui_state()
             self.cache_path.parent.mkdir(parents=True, exist_ok=True)
             self.cache_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            self._baseline_ui_state = dict(data["ui"])
             self._cache_dirty = False
         except OSError as exc:
             self.bottom_panel.append_log("WARN", f"Failed to write workspace cache: {exc}")
@@ -790,6 +933,9 @@ class AudioFlowMainWindow(QMainWindow):
             vp = raw.get("viewport")
             if isinstance(vp, dict):
                 self.canvas.set_view_state(vp)
+            ui_state = raw.get("ui")
+            if isinstance(ui_state, dict):
+                self._restore_ui_state(ui_state)
             self.sync_graph_to_engine()
             idx = self.workflow_tabs.currentIndex()
             if 0 <= idx < len(self._tabs):
@@ -894,8 +1040,55 @@ class AudioFlowMainWindow(QMainWindow):
                 "Original device bindings have been preserved and were NOT replaced:\n\n" + details,
             )
 
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802
+        if self._closing:
+            return super().eventFilter(obj, event)
+        etype = event.type()
+        if etype == QEvent.Type.MouseButtonPress and hasattr(self, "canvas"):
+            gpos = event.globalPosition().toPoint() if hasattr(event, "globalPosition") else None
+            self.canvas.hide_open_popups(gpos)
+        elif etype == QEvent.Type.Resize and self._ui_ready and not self._restoring_cache:
+            if obj is self.left_dock and self._palette_visible and self.left_dock.width() > 0:
+                self._cached_palette_width = max(200, int(self.left_dock.width()))
+                self._on_ui_state_changed()
+            elif obj is self.bottom_dock and self._terminal_visible and self.bottom_dock.height() > 0:
+                self._cached_terminal_height = max(120, int(self.bottom_dock.height()))
+                self._on_ui_state_changed()
+        return super().eventFilter(obj, event)
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        if not self._shown_once:
+            self._shown_once = True
+            self._apply_pending_ui_restore(include_maximized=True)
+            QTimer.singleShot(0, self._finalize_initial_ui)
+
+    def moveEvent(self, event) -> None:  # noqa: N802
+        super().moveEvent(event)
+        self._on_ui_state_changed()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._on_ui_state_changed()
+
+    def changeEvent(self, event) -> None:  # noqa: N802
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.WindowStateChange:
+            self._on_ui_state_changed()
+
     def closeEvent(self, event) -> None:
+        if (
+            self._ui_ready
+            and not self._restoring_cache
+            and not self._cache_dirty
+            and self._baseline_ui_state is not None
+            and self._collect_ui_state() != self._baseline_ui_state
+        ):
+            self._cache_dirty = True
         self._closing = True
+        app = QApplication.instance()
+        if isinstance(app, QApplication):
+            app.removeEventFilter(self)
         self._poll_timer.stop()
         self._cache_timer.stop()
         if self._cache_dirty:

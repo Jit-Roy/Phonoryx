@@ -18,7 +18,10 @@ def main() -> int:
         p = Path(sys.argv[1])
         if p.is_file():
             win.load_project_path(p)
-    win.showNormal()
+    if win.isMaximized():
+        win.showMaximized()
+    else:
+        win.show()
     win.raise_()
     win.activateWindow()
     return app.exec()

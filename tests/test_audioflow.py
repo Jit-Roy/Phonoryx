@@ -463,6 +463,73 @@ def test_workspace_cache_persists_across_restarts(qapp, tmp_path: Path):
         win5.close()
 
 
+def test_ui_layout_window_docks_tabs_and_terminal_cache(qapp, tmp_path: Path):
+    cache_file = tmp_path / "ui_layout_cache.json"
+
+    # Session 1: resize & move window, resize docks, pick Devices + Logs tabs, close terminal
+    avail = qapp.primaryScreen().availableGeometry()
+    target_w = max(780, min(920, avail.width() - 10))
+    target_h = max(520, min(620, avail.height() - 30))
+    target_x = avail.left() + 5
+    target_y = avail.top() + 15
+
+    win1 = AudioFlowMainWindow(auto_start=False, cache_path=cache_file, restore_cache=True)
+    win1.show()
+    qapp.processEvents()
+    try:
+        win1.setGeometry(target_x, target_y, target_w, target_h)
+        win1.resizeDocks([win1.left_dock], [440], Qt.Orientation.Horizontal)
+        win1.resizeDocks([win1.bottom_dock], [275], Qt.Orientation.Vertical)
+        win1.left_panel.tabs.setCurrentIndex(1)   # Devices
+        win1.bottom_panel.tabs.setCurrentIndex(3) # Logs
+        qapp.processEvents()
+        saved_left_w = win1.left_dock.width()
+        saved_term_h = win1.bottom_dock.height()
+        # Close bottom terminal via '×' button after setting its height
+        win1.bottom_panel.btn_close.click()
+        qapp.processEvents()
+        assert not win1.bottom_dock.isVisible()
+    finally:
+        win1.close()
+
+    # Session 2: reopened app restores geometry, palette tab=Devices, logs tab, closed terminal + height
+    win2 = AudioFlowMainWindow(auto_start=False, cache_path=cache_file, restore_cache=True)
+    win2.show()
+    qapp.processEvents()
+    try:
+        assert win2.left_panel.tabs.currentIndex() == 1
+        assert win2.bottom_panel.tabs.currentIndex() == 3
+        assert not win2.bottom_dock.isVisible()
+        assert not win2.btn_status_terminal.isChecked()
+        assert not win2.act_toggle_terminal.isChecked()
+        assert win2.left_dock.isVisible()
+        assert abs(win2.left_dock.width() - saved_left_w) <= 6
+        assert abs(win2.width() - target_w) <= 6
+        assert abs(win2.height() - target_h) <= 6
+        assert abs(win2.x() - target_x) <= 6
+        assert abs(win2.y() - target_y) <= 6
+
+        # Reopening terminal restores saved terminal height
+        win2.btn_status_terminal.click()
+        qapp.processEvents()
+        assert win2.bottom_dock.isVisible()
+        assert abs(win2.bottom_dock.height() - saved_term_h) <= 6
+
+        # Maximized state also persists across restarts
+        win2.showMaximized()
+        qapp.processEvents()
+    finally:
+        win2.close()
+
+    win3 = AudioFlowMainWindow(auto_start=False, cache_path=cache_file, restore_cache=True)
+    win3.show()
+    qapp.processEvents()
+    try:
+        assert win3.isMaximized()
+    finally:
+        win3.close()
+
+
 def test_virtual_driver_option2_inspector_and_device_prioritization(qapp):
     panel = InspectorPanel()
     hw_spk = DeviceInfo(
@@ -778,7 +845,11 @@ def test_comfyui_inline_node_widgets_selection_tabs_and_terminal(qapp, tmp_path:
         qapp.processEvents()
         assert canvas.transform().m11() == pytest.approx(zoom_before)
         assert popup_view.verticalScrollBar().value() > popup_scroll_before
-        cmb.hidePopup()
+        # Clicking on empty canvas while dropdown is open dismisses the dropdown list
+        assert popup_view.isVisible()
+        QTest.mouseClick(canvas.viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(18, 18))
+        qapp.processEvents()
+        assert not popup_view.isVisible()
         qapp.processEvents()
 
         # 10. Double-clicking workflow tab header renames workflow (inline editor + file rename)

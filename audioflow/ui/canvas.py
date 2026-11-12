@@ -1374,6 +1374,22 @@ class NodeCanvas(QGraphicsView):
                     return cmb.view()
         return None
 
+    def hide_open_popups(self, global_pos: Optional[QPoint] = None) -> bool:
+        """Dismiss any open inline node combo dropdown when clicking outside it (ComfyUI pointerdown rule)."""
+        dismissed = False
+        for item in self.node_items.values():
+            for cmb in (item.cmb_device, item.cmb_process, item.cmb_map_l, item.cmb_map_r):
+                if cmb is not None and cmb.view() is not None and cmb.view().isVisible():
+                    popup_win = cmb.view().window()
+                    if (
+                        global_pos is None
+                        or popup_win is None
+                        or not popup_win.geometry().contains(global_pos)
+                    ):
+                        cmb.hidePopup()
+                        dismissed = True
+        return dismissed
+
     def _is_wheel_over_dropdown(self, view_pos: QPoint) -> bool:
         if QApplication.activePopupWidget() is not None:
             return True
@@ -1495,6 +1511,7 @@ class NodeCanvas(QGraphicsView):
         super().dropEvent(event)
 
     def mousePressEvent(self, event) -> None:
+        self.hide_open_popups(event.globalPosition().toPoint())
         pos = event.position().toPoint()
         if event.button() == Qt.MouseButton.MiddleButton:
             self._panning = True
@@ -1682,6 +1699,7 @@ class NodeCanvas(QGraphicsView):
         super().keyPressEvent(event)
 
     def contextMenuEvent(self, event) -> None:
+        self.hide_open_popups(event.globalPos())
         item = self.itemAt(event.pos())
         menu = QMenu(self)
         if isinstance(item, ConnectionItem):
