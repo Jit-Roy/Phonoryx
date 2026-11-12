@@ -9,6 +9,7 @@ __pycache__/
 
 # CMake / Native Builds
 build/
+dist/
 out/
 *.dll
 !assets/bin/phonoryx_engine.dll
