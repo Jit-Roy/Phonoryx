@@ -146,35 +146,19 @@ NODE_SPECS: Dict[NodeType, NodeSpec] = {
     # Audio Output Nodes
     NodeType.SPEAKER_OUTPUT: NodeSpec(
         NodeType.SPEAKER_OUTPUT,
-        "Physical Speaker Output",
+        "Audio Device Output",
         NodeCategory.OUTPUT,
         ("In",),
         (),
-        "Outputs audio to a physical speaker WASAPI endpoint.",
-    ),
-    NodeType.HEADPHONE_OUTPUT: NodeSpec(
-        NodeType.HEADPHONE_OUTPUT,
-        "Headphone Output",
-        NodeCategory.OUTPUT,
-        ("In",),
-        (),
-        "Outputs audio to a headphone WASAPI endpoint.",
+        "Outputs audio to any physical playback device (speakers, headphones, monitors, USB DAC).",
     ),
     NodeType.VIRTUAL_OUTPUT: NodeSpec(
         NodeType.VIRTUAL_OUTPUT,
-        "Virtual Audio Output",
+        "Virtual Cable / Mic Output",
         NodeCategory.OUTPUT,
         ("In",),
         (),
-        "Routes audio to a Windows virtual playback endpoint.",
-    ),
-    NodeType.VIRTUAL_MIC_OUTPUT: NodeSpec(
-        NodeType.VIRTUAL_MIC_OUTPUT,
-        "Virtual Microphone Output",
-        NodeCategory.OUTPUT,
-        ("In",),
-        (),
-        "Feeds a Windows virtual audio endpoint paired with a virtual mic for Chrome/Discord/OBS.",
+        "Routes audio to a Windows virtual playback endpoint paired with a virtual mic for Chrome/Discord/OBS.",
     ),
     NodeType.FILE_RECORDING: NodeSpec(
         NodeType.FILE_RECORDING,
@@ -260,9 +244,12 @@ class NodeModel:
         eq = list(raw.get("eq_gains_db", [0.0, 0.0, 0.0, 0.0, 0.0]))
         while len(eq) < 5:
             eq.append(0.0)
+        raw_type = int(raw["type"])
+        legacy_map = {202: int(NodeType.SPEAKER_OUTPUT), 204: int(NodeType.VIRTUAL_OUTPUT)}
+        node_type = NodeType(legacy_map.get(raw_type, raw_type))
         return cls(
             id=int(raw["id"]),
-            node_type=NodeType(int(raw["type"])),
+            node_type=node_type,
             name=str(raw.get("name", "")),
             x=float(raw.get("x", 0.0)),
             y=float(raw.get("y", 0.0)),

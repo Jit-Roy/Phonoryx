@@ -55,9 +55,7 @@ typedef enum af_node_type_t {
 
     /* Output nodes */
     AF_NODE_SPEAKER_OUTPUT = 201,
-    AF_NODE_HEADPHONE_OUTPUT = 202,
     AF_NODE_VIRTUAL_OUTPUT = 203,
-    AF_NODE_VIRTUAL_MIC_OUTPUT = 204,
     AF_NODE_FILE_RECORDING = 205
 } af_node_type_t;
 

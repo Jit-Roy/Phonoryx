@@ -313,8 +313,7 @@ bool AudioEngine::apply_graph_json(const char* json_text, std::string& err_out) 
                             s.id, EndpointMode::InputCapture, s.device_id, 0, sample_rate_, &logs_);
                         res.endpoint->start();
                     }
-                } else if (s.type == AF_NODE_SPEAKER_OUTPUT || s.type == AF_NODE_HEADPHONE_OUTPUT ||
-                           s.type == AF_NODE_VIRTUAL_OUTPUT || s.type == AF_NODE_VIRTUAL_MIC_OUTPUT) {
+                } else if (s.type == AF_NODE_SPEAKER_OUTPUT || s.type == AF_NODE_VIRTUAL_OUTPUT) {
                     if (!s.device_id.empty()) {
                         res.endpoint = std::make_shared<WasapiEndpointWorker>(
                             s.id, EndpointMode::OutputRender, s.device_id, 0, sample_rate_, &logs_);

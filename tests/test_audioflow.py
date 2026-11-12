@@ -56,12 +56,12 @@ def test_section5_multi_branch_graph_sync_and_cycle_rejection():
     chrome = proj.add_node(NodeType.APP_CAPTURE, x=0, y=100, pid=99999, process_name="chrome.exe")
     splitter = proj.add_node(NodeType.SPLITTER, x=260, y=100)
     vol1 = proj.add_node(NodeType.VOLUME, x=520, y=0, volume=0.75)
-    hp = proj.add_node(NodeType.HEADPHONE_OUTPUT, x=780, y=0, device_id="test://hp")
+    hp = proj.add_node(NodeType.SPEAKER_OUTPUT, x=780, y=0, device_id="test://hp")
     eq2 = proj.add_node(NodeType.EQUALIZER, x=520, y=140, eq_gains_db=[3.0, 0.0, -2.0, 1.5, 4.0])
-    vmic1 = proj.add_node(NodeType.VIRTUAL_MIC_OUTPUT, x=780, y=140, device_id="test://vmic1")
+    vmic1 = proj.add_node(NodeType.VIRTUAL_OUTPUT, x=780, y=140, device_id="test://vmic1")
     mic = proj.add_node(NodeType.MIC_INPUT, x=260, y=280, device_id="test://mic")
     mixer = proj.add_node(NodeType.MIXER, x=520, y=280)
-    vmic2 = proj.add_node(NodeType.VIRTUAL_MIC_OUTPUT, x=780, y=280, device_id="test://vmic2")
+    vmic2 = proj.add_node(NodeType.VIRTUAL_OUTPUT, x=780, y=280, device_id="test://vmic2")
 
     assert proj.add_connection(chrome.id, 0, splitter.id, 0)[0]
     assert proj.add_connection(splitter.id, 0, vol1.id, 0)[0]
@@ -153,10 +153,24 @@ def test_project_save_load_preserves_unavailable_device_without_fallback(tmp_pat
 
 
 def test_all_required_node_specs_present():
-    # 5 source + 9 processing + 5 output = 19 required node types
-    assert len(NODE_SPECS) == 19
+    # 5 source + 9 processing + 3 output = 17 required node types
+    assert len(NODE_SPECS) == 17
     for nt in NodeType:
         assert nt in NODE_SPECS
+
+    # Legacy output IDs (202 Headphone, 204 Virtual Mic) must migrate cleanly on project load
+    migrated = ProjectModel()
+    migrated.load_project_dict(
+        {
+            "nodes": [
+                {"id": 1, "type": 202, "device_id": "d1"},
+                {"id": 2, "type": 204, "device_id": "d2"},
+            ],
+            "connections": [],
+        }
+    )
+    assert migrated.nodes[1].node_type == NodeType.SPEAKER_OUTPUT
+    assert migrated.nodes[2].node_type == NodeType.VIRTUAL_OUTPUT
 
 
 def test_pyqt_main_window_canvas_undo_grouping_and_persistence(qapp, tmp_path: Path, monkeypatch):
@@ -438,7 +452,7 @@ def test_virtual_driver_option2_inspector_and_device_prioritization(qapp):
 
     # 1. With virtual endpoints installed: Option 1 fake URIs must be gone & virtual sorted first
     panel.update_catalog([hw_spk, hw_mic, vad_spk, vad_mic], [])
-    vmic_out = NodeModel(id=1, node_type=NodeType.VIRTUAL_MIC_OUTPUT)
+    vmic_out = NodeModel(id=1, node_type=NodeType.VIRTUAL_OUTPUT)
     panel.set_node(vmic_out)
     combo_ids = [panel.cmb_device.itemData(i)[0] for i in range(panel.cmb_device.count())]
     assert not any(cid.startswith("audioflow://") for cid in combo_ids)

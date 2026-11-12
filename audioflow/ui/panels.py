@@ -413,9 +413,7 @@ class InspectorPanel(QWidget):
             NodeType.LINE_INPUT,
             NodeType.VIRTUAL_INPUT,
             NodeType.SPEAKER_OUTPUT,
-            NodeType.HEADPHONE_OUTPUT,
             NodeType.VIRTUAL_OUTPUT,
-            NodeType.VIRTUAL_MIC_OUTPUT,
         )
         self._set_row_visible(self._row_device, needs_device)
         if needs_device:
@@ -430,7 +428,6 @@ class InspectorPanel(QWidget):
         elif node.node_type in (
             NodeType.VIRTUAL_INPUT,
             NodeType.VIRTUAL_OUTPUT,
-            NodeType.VIRTUAL_MIC_OUTPUT,
         ):
             want_flow = DataFlow.CAPTURE if node.node_type == NodeType.VIRTUAL_INPUT else DataFlow.RENDER
             has_virtual = any(d.is_virtual and d.flow == want_flow for d in self._devices)
@@ -460,9 +457,7 @@ class InspectorPanel(QWidget):
             NodeType.VOLUME,
             NodeType.MIXER,
             NodeType.SPEAKER_OUTPUT,
-            NodeType.HEADPHONE_OUTPUT,
             NodeType.VIRTUAL_OUTPUT,
-            NodeType.VIRTUAL_MIC_OUTPUT,
         )
         self._set_row_visible(self._row_vol, show_vol)
         self.slider_vol.setValue(int(round(node.volume * 100)))
@@ -498,7 +493,6 @@ class InspectorPanel(QWidget):
         is_virtual_node = node.node_type in (
             NodeType.VIRTUAL_INPUT,
             NodeType.VIRTUAL_OUTPUT,
-            NodeType.VIRTUAL_MIC_OUTPUT,
         )
         candidates = [
             d

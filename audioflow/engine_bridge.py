@@ -46,9 +46,7 @@ class NodeType(IntEnum):
 
     # Audio Output Nodes
     SPEAKER_OUTPUT = 201
-    HEADPHONE_OUTPUT = 202
     VIRTUAL_OUTPUT = 203
-    VIRTUAL_MIC_OUTPUT = 204
     FILE_RECORDING = 205
 
 
