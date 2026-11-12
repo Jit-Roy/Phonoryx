@@ -13,7 +13,7 @@ VIRTUAL_DRIVER_MISSING_TEXT = (
     "virtual endpoints to Chrome, Discord, and OBS."
 )
 
-EQ_BAND_LABELS = ("60Hz", "250Hz", "1kHz", "4kHz", "12kHz")
+EQ_BAND_LABELS = ("Sub 60Hz", "Low 250Hz", "Mid 1kHz", "High 4kHz", "Air 12kHz")
 
 
 def node_needs_device_selector(node_type: NodeType) -> bool:

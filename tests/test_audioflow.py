@@ -648,6 +648,26 @@ def test_comfyui_inline_node_widgets_selection_tabs_and_terminal(qapp, tmp_path:
         win.act_toggle_palette.trigger()
         qapp.processEvents()
         assert win.left_dock.isVisible()
+
+        # 8. Every single NodeType (including Channel Mapping and Equalizer) instantiates & edits cleanly
+        created_ids = []
+        for idx, nt in enumerate(NODE_SPECS.keys()):
+            created_node = canvas.add_node_action(nt, scene_pos=QPointF(60 + (idx % 4) * 300, 500 + (idx // 4) * 180))
+            assert created_node.id in canvas.node_items
+            created_ids.append(created_node)
+
+        ch_node = next(n for n in created_ids if n.node_type == NodeType.CHANNEL_MAP)
+        ch_item = canvas.node_items[ch_node.id]
+        assert ch_item.cmb_map_l is not None and ch_item.cmb_map_r is not None
+        ch_item.cmb_map_l.setCurrentIndex(1)
+        ch_item.cmb_map_r.setCurrentIndex(0)
+        assert ch_node.channel_map == [1, 0]
+
+        eq_node = next(n for n in created_ids if n.node_type == NodeType.EQUALIZER)
+        eq_node_item = canvas.node_items[eq_node.id]
+        eq_node_item.eq_sliders[0].setValue(35)
+        assert eq_node.eq_gains_db[0] == pytest.approx(3.5)
+        assert "dB" in eq_node_item.lbl_eq_vals[0].text()
     finally:
         win.close()
 

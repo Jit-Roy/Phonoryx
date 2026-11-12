@@ -326,17 +326,20 @@ class NodeItem(QGraphicsObject):
 
         if nt == NodeType.EQUALIZER:
             has_widgets = True
+            eq_hdr = QLabel("Band Gains (-12 to +12 dB)", root)
+            eq_hdr.setStyleSheet("color: #999999; font-size: 10px;")
+            lay.addWidget(eq_hdr)
             for b, freq in enumerate(EQ_BAND_LABELS):
                 row = QHBoxLayout()
                 row.setContentsMargins(0, 0, 0, 0)
                 row.setSpacing(6)
                 lbl = QLabel(freq, root)
-                lbl.setFixedWidth(36)
+                lbl.setFixedWidth(64)
                 sl = _NoWheelSlider(Qt.Orientation.Horizontal, root)
                 sl.setRange(-120, 120)
                 sl.valueChanged.connect(lambda val, band=b: self._on_eq_changed(band, val))
-                v_lbl = QLabel("+0.0", root)
-                v_lbl.setFixedWidth(34)
+                v_lbl = QLabel("+0.0 dB", root)
+                v_lbl.setFixedWidth(48)
                 v_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
                 row.addWidget(lbl)
                 row.addWidget(sl, 1)
@@ -454,14 +457,16 @@ class NodeItem(QGraphicsObject):
                 self.lbl_gain_val.setText(f"{self.model.gain_db:+.1f}dB")
             if self.chk_mute is not None:
                 self.chk_mute.setChecked(self.model.muted)
+            ch_l = self.model.channel_map[0] if len(self.model.channel_map) > 0 else 0
+            ch_r = self.model.channel_map[1] if len(self.model.channel_map) > 1 else 1
             if self.cmb_map_l is not None:
-                self.cmb_map_l.setCurrentIndex(0 if self.model.channel_map_left == 0 else 1)
+                self.cmb_map_l.setCurrentIndex(0 if ch_l == 0 else 1)
             if self.cmb_map_r is not None:
-                self.cmb_map_r.setCurrentIndex(0 if self.model.channel_map_right == 0 else 1)
+                self.cmb_map_r.setCurrentIndex(0 if ch_r == 0 else 1)
             for idx, sl in enumerate(self.eq_sliders):
                 val_db = self.model.eq_gains_db[idx] if idx < len(self.model.eq_gains_db) else 0.0
                 sl.setValue(int(round(val_db * 10)))
-                self.lbl_eq_vals[idx].setText(f"{val_db:+.1f}")
+                self.lbl_eq_vals[idx].setText(f"{val_db:+.1f} dB")
         finally:
             self._updating_widgets = False
         self.refresh_catalog(self.canvas.devices, self.canvas.processes)
@@ -536,8 +541,9 @@ class NodeItem(QGraphicsObject):
     def _on_channel_map_changed(self) -> None:
         if self._updating_widgets or self.cmb_map_l is None or self.cmb_map_r is None:
             return
-        self.model.channel_map_left = int(self.cmb_map_l.currentData() or 0)
-        self.model.channel_map_right = int(self.cmb_map_r.currentData() or 0)
+        left_src = int(self.cmb_map_l.currentData() or 0)
+        right_src = int(self.cmb_map_r.currentData() or 0)
+        self.model.channel_map = [left_src, right_src]
         self.canvas.graph_changed.emit()
 
     def _on_eq_changed(self, band: int, tenths_db: int) -> None:
@@ -548,7 +554,7 @@ class NodeItem(QGraphicsObject):
             self.model.eq_gains_db.append(0.0)
         self.model.eq_gains_db[band] = db
         if band < len(self.lbl_eq_vals):
-            self.lbl_eq_vals[band].setText(f"{db:+.1f}")
+            self.lbl_eq_vals[band].setText(f"{db:+.1f} dB")
         self.canvas.float_param_changed.emit(self.model.id, f"eq_band_{band}", db)
         self.canvas.workspace_modified.emit()
 
