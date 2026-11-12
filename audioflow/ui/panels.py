@@ -140,7 +140,6 @@ class LeftPalettePanel(QWidget):
         self.palette_list = DraggablePaletteList()
         self._populate_palette()
         self.palette_list.itemDoubleClicked.connect(self._on_palette_activate)
-        pal_lay.addWidget(QLabel("Drag onto canvas or double-click a node:"))
         pal_lay.addWidget(self.palette_list)
         self.tabs.addTab(pal_widget, "Nodes")
 
@@ -149,7 +148,6 @@ class LeftPalettePanel(QWidget):
         dev_lay = QVBoxLayout(dev_widget)
         self.device_list = DraggablePaletteList()
         self.device_list.itemDoubleClicked.connect(self._on_device_activate)
-        dev_lay.addWidget(QLabel("Drag onto canvas or double-click a device:"))
         dev_lay.addWidget(self.device_list)
         self.tabs.addTab(dev_widget, "Devices")
 
@@ -165,7 +163,6 @@ class LeftPalettePanel(QWidget):
         self.proc_list.itemDoubleClicked.connect(self._on_process_activate)
         proc_lay.addWidget(self.proc_filter)
         proc_lay.addWidget(self.chk_audio_only)
-        proc_lay.addWidget(QLabel("Drag onto canvas or double-click an app:"))
         proc_lay.addWidget(self.proc_list)
         self.tabs.addTab(proc_widget, "Apps")
 

@@ -260,7 +260,8 @@ class AudioFlowMainWindow(QMainWindow):
         eng_m.addAction(self.act_refresh)
 
         self.menu_bar.adjustSize()
-        top_lay.addWidget(self.menu_bar)
+        self.menu_bar.setFixedHeight(self.menu_bar.sizeHint().height())
+        top_lay.addWidget(self.menu_bar, 0, Qt.AlignmentFlag.AlignVCenter)
 
         sep_left = QFrame(self.top_bar)
         sep_left.setFrameShape(QFrame.Shape.VLine)

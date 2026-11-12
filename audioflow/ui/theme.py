@@ -60,15 +60,17 @@ QMainWindow, QDialog {{
 }}
 
 QMenuBar {{
-    background-color: {COMFY_MENU_BG};
+    background-color: transparent;
     color: {COMFY_TEXT_SECONDARY};
     border: none;
-    padding: 2px 4px;
+    padding: 0px 4px;
+    margin: 0px;
     font-size: 12px;
 }}
 QMenuBar::item {{
     background: transparent;
-    padding: 4px 8px;
+    padding: 5px 8px;
+    margin: 0px;
     border-radius: 4px;
 }}
 QMenuBar::item:selected {{
