@@ -28,6 +28,9 @@ public:
     uint64_t change_sequence() const noexcept {
         return change_seq_.load(std::memory_order_acquire);
     }
+    uint32_t virtual_endpoint_count() const noexcept {
+        return virtual_count_.load(std::memory_order_acquire);
+    }
 
     static bool is_virtual_device_name(const std::string& name);
 
@@ -39,6 +42,7 @@ private:
     NotificationClient* client_{nullptr};
     bool com_owned_{false};
     std::atomic<uint64_t> change_seq_{1};
+    std::atomic<uint32_t> virtual_count_{0};
 };
 
 } // namespace af

@@ -131,18 +131,5 @@ AF_API int32_t af_poll_logs(
     return engine->impl.logs().pop_batch(out_logs, max_logs);
 }
 
-AF_API int32_t af_driver_is_available(af_engine_t* engine) {
-    if (!engine) return 0;
-    if (!engine->impl.driver_bridge().is_connected()) {
-        engine->impl.driver_bridge().connect();
-    }
-    return engine->impl.driver_bridge().is_connected() ? 1 : 0;
-}
-
-AF_API int32_t af_driver_get_endpoint_count(af_engine_t* engine) {
-    if (!engine) return 0;
-    return static_cast<int32_t>(engine->impl.driver_bridge().endpoint_count());
-}
-
 } // extern "C"
 

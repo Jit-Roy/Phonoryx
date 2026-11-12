@@ -68,7 +68,7 @@ NODE_SPECS: Dict[NodeType, NodeSpec] = {
         NodeCategory.SOURCE,
         (),
         ("Out",),
-        "Reads audio sent by another app to an AudioFlow virtual output.",
+        "Captures audio from a Windows virtual audio endpoint (e.g. Virtual Audio Driver).",
     ),
     # Audio Processing Nodes
     NodeType.VOLUME: NodeSpec(
@@ -174,7 +174,7 @@ NODE_SPECS: Dict[NodeType, NodeSpec] = {
         NodeCategory.OUTPUT,
         ("In",),
         (),
-        "Routes audio to an AudioFlow Virtual Playback/Output endpoint.",
+        "Routes audio to a Windows virtual playback endpoint.",
     ),
     NodeType.VIRTUAL_MIC_OUTPUT: NodeSpec(
         NodeType.VIRTUAL_MIC_OUTPUT,
@@ -182,7 +182,7 @@ NODE_SPECS: Dict[NodeType, NodeSpec] = {
         NodeCategory.OUTPUT,
         ("In",),
         (),
-        "Feeds audio into an AudioFlow Virtual Microphone for Chrome/Discord/OBS.",
+        "Feeds a Windows virtual audio endpoint paired with a virtual mic for Chrome/Discord/OBS.",
     ),
     NodeType.FILE_RECORDING: NodeSpec(
         NodeType.FILE_RECORDING,

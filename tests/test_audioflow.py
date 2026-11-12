@@ -15,11 +15,11 @@ from PySide6.QtGui import QDropEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QMessageBox
 
-from audioflow.engine_bridge import AudioFlowEngine, DataFlow, NodeType
-from audioflow.models.graph_model import NODE_SPECS, ProjectModel
+from audioflow.engine_bridge import AudioFlowEngine, DataFlow, DeviceInfo, DeviceRoleHint, NodeType
+from audioflow.models.graph_model import NODE_SPECS, NodeModel, ProjectModel
 from audioflow.ui.canvas import HEADER_HEIGHT, NODE_DRAG_MIME_TYPE, NODE_WIDTH
 from audioflow.ui.main_window import AudioFlowMainWindow
-from audioflow.ui.panels import DraggablePaletteList
+from audioflow.ui.panels import DraggablePaletteList, InspectorPanel
 
 
 @pytest.fixture(scope="session")
@@ -40,15 +40,13 @@ def test_native_engine_discovery_and_lifecycle():
         assert len(procs) > 0, "Expected running Windows processes"
         assert any(p.pid > 0 and p.exe_name for p in procs)
 
-        assert isinstance(eng.driver_is_available(), bool)
-        assert isinstance(eng.driver_endpoint_count(), int)
-
         assert eng.start()
         time.sleep(0.08)
         stats = eng.get_engine_stats()
         assert stats.running is True
         assert stats.sample_rate == 48000
         assert stats.processed_blocks > 0
+        assert stats.virtual_endpoints == sum(1 for d in devices if d.is_virtual)
         eng.stop()
         assert eng.get_engine_stats().running is False
 
@@ -389,5 +387,76 @@ def test_workspace_cache_persists_across_restarts(qapp, tmp_path: Path):
         assert grp_id in win2.canvas.group_items
     finally:
         win2.close()
+
+
+def test_virtual_driver_option2_inspector_and_device_prioritization(qapp):
+    panel = InspectorPanel()
+    hw_spk = DeviceInfo(
+        id="hw-spk",
+        name="Realtek Speakers",
+        flow=DataFlow.RENDER,
+        role_hint=DeviceRoleHint.SPEAKERS,
+        state=1,
+        sample_rate=48000,
+        channels=2,
+        is_default=True,
+        is_virtual=False,
+    )
+    hw_mic = DeviceInfo(
+        id="hw-mic",
+        name="Realtek Microphone",
+        flow=DataFlow.CAPTURE,
+        role_hint=DeviceRoleHint.MICROPHONE,
+        state=1,
+        sample_rate=48000,
+        channels=2,
+        is_default=True,
+        is_virtual=False,
+    )
+    vad_spk = DeviceInfo(
+        id="vad-spk",
+        name="Speakers (Virtual Audio Driver)",
+        flow=DataFlow.RENDER,
+        role_hint=DeviceRoleHint.VIRTUAL,
+        state=1,
+        sample_rate=48000,
+        channels=2,
+        is_default=False,
+        is_virtual=True,
+    )
+    vad_mic = DeviceInfo(
+        id="vad-mic",
+        name="Microphone (Virtual Audio Driver)",
+        flow=DataFlow.CAPTURE,
+        role_hint=DeviceRoleHint.VIRTUAL,
+        state=1,
+        sample_rate=48000,
+        channels=2,
+        is_default=False,
+        is_virtual=True,
+    )
+
+    # 1. With virtual endpoints installed: Option 1 fake URIs must be gone & virtual sorted first
+    panel.update_catalog([hw_spk, hw_mic, vad_spk, vad_mic], [])
+    vmic_out = NodeModel(id=1, node_type=NodeType.VIRTUAL_MIC_OUTPUT)
+    panel.set_node(vmic_out)
+    combo_ids = [panel.cmb_device.itemData(i)[0] for i in range(panel.cmb_device.count())]
+    assert not any(cid.startswith("audioflow://") for cid in combo_ids)
+    assert "hw-mic" not in combo_ids and "vad-mic" not in combo_ids
+    assert combo_ids[1] == "vad-spk"
+    assert panel.lbl_missing_warn.isHidden()
+
+    vin = NodeModel(id=2, node_type=NodeType.VIRTUAL_INPUT)
+    panel.set_node(vin)
+    in_ids = [panel.cmb_device.itemData(i)[0] for i in range(panel.cmb_device.count())]
+    assert in_ids[1] == "vad-mic"
+    assert "vad-spk" not in in_ids
+
+    # 2. Without any Windows virtual driver installed: show setup hint for VirtualDrivers/Virtual-Audio-Driver
+    panel.update_catalog([hw_spk, hw_mic], [])
+    panel.set_node(vmic_out)
+    assert not panel.lbl_missing_warn.isHidden()
+    assert "VirtualDrivers/Virtual-Audio-Driver" in panel.lbl_missing_warn.text()
+
 
 

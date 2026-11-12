@@ -23,11 +23,10 @@ AudioEngine::AudioEngine(uint32_t sample_rate, uint32_t block_frames)
     : sample_rate_(sample_rate > 0 ? sample_rate : 48000)
     , block_frames_(block_frames > 0 ? block_frames : 480)
     , device_mgr_(&logs_)
-    , driver_bridge_(&logs_)
 {
     stop_event_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     device_mgr_.initialize();
-    driver_bridge_.connect();
+    device_mgr_.enumerate_devices();
 }
 
 AudioEngine::~AudioEngine() {
@@ -43,7 +42,6 @@ AudioEngine::~AudioEngine() {
         }
         resources_.clear();
     }
-    driver_bridge_.disconnect();
     device_mgr_.shutdown();
     if (stop_event_) {
         CloseHandle(stop_event_);
@@ -299,9 +297,8 @@ bool AudioEngine::apply_graph_json(const char* json_text, std::string& err_out) 
                 res.endpoint->stop();
                 res.endpoint.reset();
             }
-            const bool is_virtual_drv_uri = (s.device_id.rfind("audioflow://", 0) == 0);
             const bool is_test_uri = (s.device_id.rfind("test://", 0) == 0);
-            if (!is_virtual_drv_uri && !is_test_uri) {
+            if (!is_test_uri) {
                 if (s.type == AF_NODE_APP_CAPTURE) {
                     res.endpoint = std::make_shared<WasapiEndpointWorker>(
                         s.id, EndpointMode::ProcessLoopback, "", s.pid, sample_rate_, &logs_);
@@ -351,18 +348,6 @@ bool AudioEngine::apply_graph_json(const char* json_text, std::string& err_out) 
         cn.current_gain = s.muted ? 0.0f : (s.volume * dsp::db_to_linear(s.gain_db));
         cn.eq.prepare(sample_rate_);
         cn.eq.update_if_needed(s.eq_gains_db);
-
-        // Optional direct driver shared-memory endpoint binding ("audioflow://capture/0", "audioflow://render/0")
-        if (s.device_id.rfind("audioflow://", 0) == 0 && driver_bridge_.is_connected()) {
-            const bool is_cap = (s.device_id.find("capture/") != std::string::npos);
-            uint32_t idx = 0;
-            const size_t slash = s.device_id.rfind('/');
-            if (slash != std::string::npos) {
-                idx = static_cast<uint32_t>(std::strtoul(s.device_id.c_str() + slash + 1, nullptr, 10));
-            }
-            cn.driver_is_capture = is_cap;
-            driver_bridge_.map_endpoint_ring(idx, is_cap, &cn.driver_ring);
-        }
     }
 
     for (size_t e = 0; e < conns.size(); ++e) {
@@ -463,7 +448,7 @@ void AudioEngine::get_stats(af_engine_stats_t* out) {
     out->running = running_.load(std::memory_order_acquire) ? 1u : 0u;
     out->sample_rate = sample_rate_;
     out->block_frames = block_frames_;
-    out->driver_connected = driver_bridge_.is_connected() ? 1u : 0u;
+    out->virtual_endpoints = device_mgr_.virtual_endpoint_count();
     out->cpu_load_percent = cpu_load_percent_.load(std::memory_order_relaxed);
     out->processed_blocks = processed_blocks_.load(std::memory_order_relaxed);
     out->device_change_seq = device_mgr_.change_sequence();
@@ -486,8 +471,6 @@ void AudioEngine::process_single_block(CompiledGraphSnapshot* snap) {
         if (is_source_node(node.type)) {
             if (node.test_in_ring && node.test_in_ring->available_read() >= frames) {
                 node.test_in_ring->read(work, frames);
-            } else if (node.driver_ring && node.driver_is_capture) {
-                VirtualDriverBridge::read_shared_ring(node.driver_ring, work, frames);
             } else if (node.endpoint && node.endpoint->ring().available_read() >= frames) {
                 node.endpoint->ring().read(work, frames);
             }
@@ -574,9 +557,6 @@ void AudioEngine::process_single_block(CompiledGraphSnapshot* snap) {
 
             if (node.test_out_ring) {
                 node.test_out_ring->write(work, frames);
-            }
-            if (node.driver_ring && !node.driver_is_capture) {
-                VirtualDriverBridge::write_shared_ring(node.driver_ring, work, frames);
             }
             if (node.endpoint) {
                 node.endpoint->ring().write(work, frames);

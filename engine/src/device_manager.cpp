@@ -142,8 +142,7 @@ bool DeviceManager::is_virtual_device_name(const std::string& name) {
     std::string lower = name;
     std::transform(lower.begin(), lower.end(), lower.begin(),
                    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    return lower.find("audioflow") != std::string::npos ||
-           lower.find("virtual") != std::string::npos ||
+    return lower.find("virtual") != std::string::npos ||
            lower.find("cable") != std::string::npos ||
            lower.find("voicemeeter") != std::string::npos ||
            lower.find("wave link") != std::string::npos;
@@ -259,6 +258,12 @@ std::vector<af_device_info_t> DeviceManager::enumerate_devices() {
 
     collect_flow(eRender);
     collect_flow(eCapture);
+
+    uint32_t v_count = 0;
+    for (const auto& r : results) {
+        if (r.is_virtual) ++v_count;
+    }
+    virtual_count_.store(v_count, std::memory_order_release);
 
     if (release_local && local_enum) local_enum->Release();
     if (SUCCEEDED(hr_co)) CoUninitialize();

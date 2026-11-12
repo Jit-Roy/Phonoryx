@@ -14,7 +14,6 @@
 #include "device_manager.hpp"
 #include "dsp_nodes.hpp"
 #include "ring_buffer.hpp"
-#include "virtual_driver_bridge.hpp"
 #include "wasapi_endpoint.hpp"
 
 namespace af {
@@ -46,8 +45,6 @@ struct CompiledNode {
     std::shared_ptr<NodeRuntimeParams> params;
     std::shared_ptr<WasapiEndpointWorker> endpoint;
     std::shared_ptr<WavFileRecorder> recorder;
-    AUDIOFLOW_SHARED_RING* driver_ring{nullptr};
-    bool driver_is_capture{false};
 
     // DSP state owned exclusively by RT thread for this snapshot
     float current_gain{1.0f};
@@ -84,7 +81,6 @@ public:
 
     DeviceManager& devices() noexcept { return device_mgr_; }
     LogQueue& logs() noexcept { return logs_; }
-    VirtualDriverBridge& driver_bridge() noexcept { return driver_bridge_; }
 
     bool apply_graph_json(const char* json_text, std::string& err_out);
     bool set_node_float_param(uint64_t node_id, const char* name, float value);
@@ -124,7 +120,6 @@ private:
 
     LogQueue logs_;
     DeviceManager device_mgr_;
-    VirtualDriverBridge driver_bridge_;
 
     std::mutex ctrl_mutex_;
     std::unordered_map<uint64_t, ManagedNodeResources> resources_;

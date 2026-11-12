@@ -102,7 +102,7 @@ typedef struct af_engine_stats_t {
     uint32_t block_frames;
     uint32_t active_nodes;
     uint32_t active_connections;
-    uint32_t driver_connected;
+    uint32_t virtual_endpoints;
     uint32_t total_xruns;
     float cpu_load_percent;
     uint64_t processed_blocks;
@@ -181,10 +181,6 @@ AF_API int32_t af_poll_logs(
     af_engine_t* engine,
     af_log_entry_t* out_logs,
     int32_t max_logs);
-
-/* Phase 5 / 6: Custom Virtual Driver Control */
-AF_API int32_t af_driver_is_available(af_engine_t* engine);
-AF_API int32_t af_driver_get_endpoint_count(af_engine_t* engine);
 
 #ifdef __cplusplus
 }

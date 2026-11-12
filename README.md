@@ -1,10 +1,10 @@
 # AudioFlow — Node-Based Windows Audio Routing Studio
 
-AudioFlow is a standalone Windows audio routing and processing studio combining a **Python 3.13 + PySide6 (LGPL v3)** dark workstation UI (`audioflow/`), a **C++20 real-time Core Audio / WASAPI engine DLL** (`engine/`), and an optional **WDK PortCls WaveRT virtual audio driver** (`driver/`).
+AudioFlow is a standalone Windows audio routing and processing studio combining a **Python + PySide6 (LGPL v3)** dark workstation UI (`audioflow/`) and a **C++20 real-time Core Audio / WASAPI engine DLL** (`engine/`).
 
 ## Quick Start
 
-1. **Build the C++20 Audio Engine** (requires Visual Studio Build Tools 2022 + CMake + Windows SDK):
+1. **Build the C++20 Audio Engine** (requires Visual Studio 2022+ Build Tools + CMake + Windows SDK):
    ```powershell
    cmake -S engine -B build/engine
    cmake --build build/engine --config Release --parallel
@@ -23,7 +23,13 @@ AudioFlow is a standalone Windows audio routing and processing studio combining 
    .\.venv\Scripts\python.exe -m audioflow
    ```
 
-## Virtual Audio Driver (`driver/`)
+## Virtual Microphone / Browser Routing (Open-Source Setup)
 
-`driver/` contains the WDM/KS `PortCls` (`WaveRT` + `Topology`) virtual audio driver (`AudioFlowVirtualAudio.inf`, `AudioFlowVirtualAudio.vcxproj`, `driver/src/*.cpp`) exposing 4 virtual playback and 4 virtual capture endpoints with zero-copy MDL-mapped shared ring buffers. Compiling `.sys` requires installing the **Windows Driver Kit (WDK)**; see [driver/README.md](driver/README.md).
+AudioFlow captures per-application audio (`WASAPI` Process Loopback), hardware microphones, and system outputs with zero extra drivers. If you want to expose processed AudioFlow audio as a **microphone in Chrome, Discord, Zoom, or OBS**, install the free, MIT-licensed open-source Windows virtual audio driver:
+
+- **[VirtualDrivers/Virtual-Audio-Driver](https://github.com/VirtualDrivers/Virtual-Audio-Driver)** (MIT License + MS-PL components, pre-signed releases via SignPath)
+
+Once installed:
+1. Add a **Virtual Audio Output** / **Virtual Microphone Output** node in AudioFlow and select its virtual render endpoint.
+2. In Chrome / Discord / OBS, choose the paired virtual microphone input device.
 

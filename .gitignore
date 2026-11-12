@@ -21,17 +21,10 @@ out/
 *.log
 *.lastbuildstate
 
-# WDK Driver Build Artifacts
-driver/x64/
-driver/Debug/
-driver/Release/
-*.sys
-*.cat
-*.cer
-
 # Local Runtime / Editor Logs & Artifacts
 .audioflow_err.txt
 .vscode/
 .vs/
 *.user
 *.aflow
+

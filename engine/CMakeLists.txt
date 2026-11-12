@@ -15,7 +15,6 @@ set(ENGINE_SOURCES
     src/process_manager.cpp
     src/dsp_nodes.cpp
     src/wasapi_endpoint.cpp
-    src/virtual_driver_bridge.cpp
     src/audio_graph.cpp
     src/engine_capi.cpp
 )
@@ -26,7 +25,6 @@ target_include_directories(audioflow_engine
         ${CMAKE_CURRENT_SOURCE_DIR}/include
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
-        ${CMAKE_CURRENT_SOURCE_DIR}/../driver/include
 )
 target_compile_definitions(audioflow_engine PRIVATE AUDIOFLOW_EXPORTS)
 target_link_libraries(audioflow_engine PRIVATE
@@ -35,8 +33,6 @@ target_link_libraries(audioflow_engine PRIVATE
     avrt
     mmdevapi
     ksuser
-    setupapi
-    cfgmgr32
     psapi
     winmm
 )
@@ -55,7 +51,6 @@ add_executable(audioflow_tests
 target_include_directories(audioflow_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/src
-    ${CMAKE_CURRENT_SOURCE_DIR}/../driver/include
 )
 target_compile_definitions(audioflow_tests PRIVATE AUDIOFLOW_STATIC_TEST)
 target_link_libraries(audioflow_tests PRIVATE
@@ -64,8 +59,6 @@ target_link_libraries(audioflow_tests PRIVATE
     avrt
     mmdevapi
     ksuser
-    setupapi
-    cfgmgr32
     psapi
     winmm
 )

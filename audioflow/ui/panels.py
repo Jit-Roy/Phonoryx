@@ -422,6 +422,22 @@ class InspectorPanel(QWidget):
                 "Preserved original ID without switching devices."
             )
             self.lbl_missing_warn.show()
+        elif node.node_type in (
+            NodeType.VIRTUAL_INPUT,
+            NodeType.VIRTUAL_OUTPUT,
+            NodeType.VIRTUAL_MIC_OUTPUT,
+        ):
+            want_flow = DataFlow.CAPTURE if node.node_type == NodeType.VIRTUAL_INPUT else DataFlow.RENDER
+            has_virtual = any(d.is_virtual and d.flow == want_flow for d in self._devices)
+            if not has_virtual:
+                self.lbl_missing_warn.setText(
+                    "No Windows virtual audio driver detected. Install the open-source MIT "
+                    "VirtualDrivers/Virtual-Audio-Driver (or another virtual cable) to expose "
+                    "virtual endpoints to Chrome, Discord, and OBS."
+                )
+                self.lbl_missing_warn.show()
+            else:
+                self.lbl_missing_warn.hide()
         else:
             self.lbl_missing_warn.hide()
 
@@ -474,26 +490,24 @@ class InspectorPanel(QWidget):
         self.cmb_device.clear()
         self.cmb_device.addItem("<Unassigned>", ("", ""))
         want_capture = node.node_type in (NodeType.MIC_INPUT, NodeType.LINE_INPUT, NodeType.VIRTUAL_INPUT)
-        seen_ids = {""}
-        for d in self._devices:
-            if want_capture and d.flow != DataFlow.CAPTURE:
-                continue
-            if not want_capture and node.node_type != NodeType.VIRTUAL_MIC_OUTPUT and d.flow != DataFlow.RENDER:
-                continue
-            self.cmb_device.addItem(d.name, (d.id, d.name))
-            seen_ids.add(d.id)
+        is_virtual_node = node.node_type in (
+            NodeType.VIRTUAL_INPUT,
+            NodeType.VIRTUAL_OUTPUT,
+            NodeType.VIRTUAL_MIC_OUTPUT,
+        )
+        candidates = [
+            d
+            for d in self._devices
+            if (d.flow == DataFlow.CAPTURE if want_capture else d.flow == DataFlow.RENDER)
+        ]
+        if is_virtual_node:
+            candidates.sort(key=lambda d: (not d.is_virtual, d.name.lower()))
 
-        # Offer direct AudioFlow virtual driver rings as selectable endpoints
-        for i in range(4):
-            uri = (
-                f"audioflow://virtual/capture/{i}"
-                if node.node_type in (NodeType.VIRTUAL_INPUT, NodeType.VIRTUAL_MIC_OUTPUT)
-                else f"audioflow://virtual/render/{i}"
-            )
-            label = f"AudioFlow Virtual Driver Endpoint #{i + 1}"
-            if uri not in seen_ids:
-                self.cmb_device.addItem(label, (uri, label))
-                seen_ids.add(uri)
+        seen_ids = {""}
+        for d in candidates:
+            label = f"[Virtual] {d.name}" if d.is_virtual else d.name
+            self.cmb_device.addItem(label, (d.id, d.name))
+            seen_ids.add(d.id)
 
         if node.device_id and node.device_id not in seen_ids:
             self.cmb_device.addItem(
@@ -678,12 +692,12 @@ class BottomTelemetryPanel(QWidget):
             self.device_status_table.setItem(row, 3, QTableWidgetItem("Virtual" if d.is_virtual else "Physical"))
 
     def update_telemetry(self, stats: EngineStats, nodes: Dict[int, NodeModel], meters: Dict[int, NodeMeter]) -> None:
-        drv = "Connected" if stats.driver_connected else "Driver Not Installed"
         state = "RUNNING" if stats.running else "STOPPED"
         self.lbl_engine_summary.setText(
             f"State: {state} | {stats.sample_rate} Hz / {stats.block_frames} frames | "
             f"Nodes: {stats.active_nodes} | Links: {stats.active_connections} | "
-            f"CPU: {stats.cpu_load_percent:.2f}% | XRUNs: {stats.total_xruns} | Virtual Driver: {drv}"
+            f"CPU: {stats.cpu_load_percent:.2f}% | XRUNs: {stats.total_xruns} | "
+            f"Virtual Endpoints: {stats.virtual_endpoints}"
         )
 
         ordered = sorted(nodes.values(), key=lambda n: n.id)

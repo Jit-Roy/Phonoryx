@@ -100,7 +100,7 @@ class _AfEngineStats(ctypes.Structure):
         ("block_frames", ctypes.c_uint32),
         ("active_nodes", ctypes.c_uint32),
         ("active_connections", ctypes.c_uint32),
-        ("driver_connected", ctypes.c_uint32),
+        ("virtual_endpoints", ctypes.c_uint32),
         ("total_xruns", ctypes.c_uint32),
         ("cpu_load_percent", ctypes.c_float),
         ("processed_blocks", ctypes.c_uint64),
@@ -159,7 +159,7 @@ class EngineStats:
     block_frames: int
     active_nodes: int
     active_connections: int
-    driver_connected: bool
+    virtual_endpoints: int
     total_xruns: int
     cpu_load_percent: float
     processed_blocks: int
@@ -296,12 +296,6 @@ class AudioFlowEngine:
         ]
         lib.af_poll_logs.restype = ctypes.c_int32
 
-        lib.af_driver_is_available.argtypes = [c_void_p]
-        lib.af_driver_is_available.restype = ctypes.c_int32
-
-        lib.af_driver_get_endpoint_count.argtypes = [c_void_p]
-        lib.af_driver_get_endpoint_count.restype = ctypes.c_int32
-
     def close(self) -> None:
         if self._handle:
             self._lib.af_engine_stop(self._handle)
@@ -431,7 +425,7 @@ class AudioFlowEngine:
             block_frames=int(stats.block_frames),
             active_nodes=int(stats.active_nodes),
             active_connections=int(stats.active_connections),
-            driver_connected=bool(stats.driver_connected),
+            virtual_endpoints=int(stats.virtual_endpoints),
             total_xruns=int(stats.total_xruns),
             cpu_load_percent=float(stats.cpu_load_percent),
             processed_blocks=int(stats.processed_blocks),
@@ -452,12 +446,4 @@ class AudioFlowEngine:
             )
             for i in range(max(0, count))
         ]
-
-    def driver_is_available(self) -> bool:
-        return bool(self._handle and self._lib.af_driver_is_available(self._handle) != 0)
-
-    def driver_endpoint_count(self) -> int:
-        if not self._handle:
-            return 0
-        return int(self._lib.af_driver_get_endpoint_count(self._handle))
 
