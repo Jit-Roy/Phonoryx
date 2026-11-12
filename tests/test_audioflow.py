@@ -158,19 +158,27 @@ def test_all_required_node_specs_present():
     for nt in NodeType:
         assert nt in NODE_SPECS
 
-    # Legacy output IDs (202 Headphone, 204 Virtual Mic) must migrate cleanly on project load
+    # Legacy output IDs (202 Headphone, 204 Virtual Mic) and removed meter (106) must migrate cleanly
     migrated = ProjectModel()
     migrated.load_project_dict(
         {
             "nodes": [
                 {"id": 1, "type": 202, "device_id": "d1"},
                 {"id": 2, "type": 204, "device_id": "d2"},
+                {"id": 3, "type": 1},
+                {"id": 4, "type": 106},
             ],
-            "connections": [],
+            "connections": [
+                {"src_node": 3, "src_port": 0, "dst_node": 4, "dst_port": 0},
+                {"src_node": 4, "src_port": 0, "dst_node": 1, "dst_port": 0},
+            ],
         }
     )
     assert migrated.nodes[1].node_type == NodeType.SPEAKER_OUTPUT
     assert migrated.nodes[2].node_type == NodeType.VIRTUAL_OUTPUT
+    assert 4 not in migrated.nodes
+    assert len(migrated.connections) == 1
+    assert (migrated.connections[0].src_node, migrated.connections[0].dst_node) == (3, 1)
 
 
 def test_pyqt_main_window_canvas_undo_grouping_and_persistence(qapp, tmp_path: Path, monkeypatch):
@@ -401,6 +409,14 @@ def test_workspace_cache_persists_across_restarts(qapp, tmp_path: Path):
         assert grp_id in win2.canvas.group_items
     finally:
         win2.close()
+
+    # Opening with restore_cache=False must not wipe an existing cache file on close
+    before_bytes = cache_file.read_text(encoding="utf-8")
+    win3 = AudioFlowMainWindow(auto_start=False, cache_path=cache_file, restore_cache=False)
+    win3.show()
+    qapp.processEvents()
+    win3.close()
+    assert cache_file.read_text(encoding="utf-8") == before_bytes
 
 
 def test_virtual_driver_option2_inspector_and_device_prioritization(qapp):

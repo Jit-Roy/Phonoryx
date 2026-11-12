@@ -537,14 +537,38 @@ class ProjectModel:
         self, data: dict, available_device_ids: Optional[Set[str]] = None
     ) -> List[NodeModel]:
         self.clear()
+        removed_passthrough_ids: Set[int] = set()
         for raw_n in data.get("nodes", []):
-            node = NodeModel.from_project_dict(raw_n)
+            try:
+                node = NodeModel.from_project_dict(raw_n)
+            except ValueError:
+                if int(raw_n.get("type", -1)) == 106:
+                    removed_passthrough_ids.add(int(raw_n["id"]))
+                continue
             self.nodes[node.id] = node
             if node.id >= self._next_node_id:
                 self._next_node_id = node.id + 1
 
-        for raw_c in data.get("connections", []):
-            c = ConnectionModel.from_dict(raw_c)
+        raw_conns = [ConnectionModel.from_dict(rc) for rc in data.get("connections", [])]
+        if removed_passthrough_ids:
+            # Bypass removed inline meter nodes by bridging incoming -> outgoing wires
+            incoming_by_removed: Dict[int, ConnectionModel] = {}
+            for c in raw_conns:
+                if c.dst_node in removed_passthrough_ids and c.src_node in self.nodes:
+                    incoming_by_removed[c.dst_node] = c
+            bridged: List[ConnectionModel] = []
+            for c in raw_conns:
+                if c.src_node in removed_passthrough_ids:
+                    up = incoming_by_removed.get(c.src_node)
+                    if up is not None and c.dst_node in self.nodes:
+                        bridged.append(
+                            ConnectionModel(up.src_node, up.src_port, c.dst_node, c.dst_port)
+                        )
+                elif c.dst_node not in removed_passthrough_ids:
+                    bridged.append(c)
+            raw_conns = bridged
+
+        for c in raw_conns:
             if c.src_node in self.nodes and c.dst_node in self.nodes:
                 self.connections.append(c)
 

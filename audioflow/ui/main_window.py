@@ -56,6 +56,9 @@ class AudioFlowMainWindow(QMainWindow):
         self.project = ProjectModel()
         self.project_path: Optional[Path] = None
         self.cache_path: Path = Path(cache_path) if cache_path is not None else self.DEFAULT_CACHE_PATH
+        # Never clobber the user's default cache when restore_cache=False without an explicit cache_path
+        self._persist_cache = bool(restore_cache or cache_path is not None)
+        self._cache_dirty = False
         self._restoring_cache = False
         self._devices: List[DeviceInfo] = []
         self._processes: List[ProcessInfo] = []
@@ -299,12 +302,24 @@ class AudioFlowMainWindow(QMainWindow):
     # ----- Workspace Cache & File Operations -----
 
     def schedule_cache_save(self) -> None:
-        if not self._restoring_cache:
+        if not self._restoring_cache and self._persist_cache:
+            self._cache_dirty = True
             self._cache_timer.start()
 
     def save_workspace_cache(self) -> None:
+        if not self._persist_cache:
+            return
         try:
+            if self.cache_path.is_file():
+                try:
+                    existing = self.cache_path.read_text(encoding="utf-8")
+                    if '"nodes": []' not in existing and self.project.nodes:
+                        bak = self.cache_path.with_suffix(".bak.json")
+                        bak.write_text(existing, encoding="utf-8")
+                except OSError:
+                    pass
             self.project.save_file(self.cache_path)
+            self._cache_dirty = False
         except OSError as exc:
             self.bottom_panel.append_log("WARN", f"Failed to write workspace cache: {exc}")
 
@@ -341,6 +356,7 @@ class AudioFlowMainWindow(QMainWindow):
         self.canvas.rebuild_from_project()
         self.right_panel.set_node(None)
         self.sync_graph_to_engine()
+        self._cache_dirty = True
         self.save_workspace_cache()
 
     def save_project(self) -> None:
@@ -386,7 +402,8 @@ class AudioFlowMainWindow(QMainWindow):
     def closeEvent(self, event) -> None:
         self._poll_timer.stop()
         self._cache_timer.stop()
-        self.save_workspace_cache()
+        if self._cache_dirty:
+            self.save_workspace_cache()
         if self._owns_engine:
             self.engine.close()
         super().closeEvent(event)
