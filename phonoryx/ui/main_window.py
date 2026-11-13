@@ -197,6 +197,7 @@ class PhonoryxMainWindow(QMainWindow):
         self._processes: List[ProcessInfo] = []
         self._last_device_seq = -1
         self._last_proc_poll_ts = 0.0
+        self._transient_status_until: float = 0.0
 
         self._cache_timer = QTimer(self)
         self._cache_timer.setSingleShot(True)
@@ -1087,6 +1088,7 @@ class PhonoryxMainWindow(QMainWindow):
         self.bottom_panel.push_native_logs(self.engine.poll_logs())
         self._resync_running_tabs(resync_tabs)
         if log_feedback:
+            self.show_transient_status("Refreshed", 1.0)
             audio_active = sum(1 for p in self._processes if p.has_audio_session)
             self.bottom_panel.append_log(
                 "INFO",
@@ -1167,16 +1169,32 @@ class PhonoryxMainWindow(QMainWindow):
             self.sync_graph_to_engine()
 
     def _on_validation_error(self, msg: str) -> None:
-        self.lbl_status_engine.setText(msg)
+        self.show_transient_status(msg, 2.5)
         self.bottom_panel.append_log("WARN", msg)
 
+    def show_transient_status(self, text: str, duration_sec: float = 1.0) -> None:
+        """Display temporary status text in place of engine stats for duration_sec seconds."""
+        self._transient_status_until = time.monotonic() + duration_sec
+        if hasattr(self, "lbl_status_engine"):
+            self.lbl_status_engine.setText(text)
+        QTimer.singleShot(int(duration_sec * 1000) + 50, self._refresh_active_tab_telemetry)
+
     def _refresh_active_tab_telemetry(self) -> None:
-        if self.engine is None or not hasattr(self, "lbl_status_engine"):
+        if not hasattr(self, "lbl_status_engine"):
             return
-        stats = self.engine.get_engine_stats()
-        meters = self.engine.get_node_meters()
-        self.canvas.update_meters(meters)
-        self.bottom_panel.update_telemetry(stats, self.project.nodes, meters)
+        stats = None
+        if self.engine is not None:
+            stats = self.engine.get_engine_stats()
+            meters = self.engine.get_node_meters()
+            self.canvas.update_meters(meters)
+            self.bottom_panel.update_telemetry(stats, self.project.nodes, meters)
+
+        if hasattr(self, "_transient_status_until") and time.monotonic() < self._transient_status_until:
+            return
+
+        if stats is None:
+            return
+
         state = "Running" if stats.running else "Stopped"
         bg_running = sum(
             1
@@ -1438,7 +1456,7 @@ class PhonoryxMainWindow(QMainWindow):
             self._tabs[idx].file_path = target
             self._tabs[idx].dirty = False
             self._refresh_tab_title(idx)
-        self.lbl_status_engine.setText(f"Saved {target.name}")
+        self.show_transient_status(f"Saved {target.name}", 1.0)
         if self._persist_cache:
             self._cache_dirty = True
             self.save_workspace_cache()

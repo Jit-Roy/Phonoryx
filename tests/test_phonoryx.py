@@ -1938,12 +1938,41 @@ def test_dropdown_selection_accurate_under_zoom_and_no_mute_fallthrough(qapp, tm
         assert not chk_mute.isChecked(), "Clicking outside must not toggle mute"
     finally:
         win.close()
+def test_transient_status_save_and_refresh(qapp, tmp_path):
+    """Test that Save and Refresh display transient status without immediate telemetry overwrite."""
+    from phonoryx.ui.main_window import PhonoryxMainWindow
+    import time
 
+    win = PhonoryxMainWindow(restore_cache=False, auto_start=False)
+    try:
+        win.show()
+        qapp.processEvents()
 
+        # 1. Manual show_transient_status
+        win.show_transient_status("Testing 123", duration_sec=0.2)
+        assert win.lbl_status_engine.text() == "Testing 123"
 
+        # Telemetry poll during active transient period must not overwrite status
+        win._refresh_active_tab_telemetry()
+        assert win.lbl_status_engine.text() == "Testing 123"
 
+        # After transient expires, telemetry restores engine state
+        time.sleep(0.25)
+        win._refresh_active_tab_telemetry()
+        assert "Engine" in win.lbl_status_engine.text()
 
+        # 2. Refresh button feedback
+        win.refresh_devices_and_processes(log_feedback=True)
+        assert win.lbl_status_engine.text() == "Refreshed"
+        win._refresh_active_tab_telemetry()
+        assert win.lbl_status_engine.text() == "Refreshed"
 
-
-
+        # 3. Save feedback
+        save_file = tmp_path / "transient_test.json"
+        win._save_to_path(save_file)
+        assert win.lbl_status_engine.text() == f"Saved {save_file.name}"
+        win._refresh_active_tab_telemetry()
+        assert win.lbl_status_engine.text() == f"Saved {save_file.name}"
+    finally:
+        win.close()
 
