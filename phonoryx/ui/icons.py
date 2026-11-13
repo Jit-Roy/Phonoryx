@@ -87,7 +87,7 @@ def _draw_section_tab(p: QPainter, r: QRectF, color_hex: str, running: bool = Fa
     col = QColor(color_hex)
     p.setPen(Qt.PenStyle.NoPen)
     # Soft card sheet
-    p.setBrush(QColor("#2F2B3E"))
+    p.setBrush(QColor("#242424"))
     p.drawRoundedRect(QRectF(w * 0.16, h * 0.16, w * 0.72, h * 0.70), 2.5, 2.5)
     # Left colorful OneNote binder stripe
     p.setBrush(col)
@@ -95,7 +95,7 @@ def _draw_section_tab(p: QPainter, r: QRectF, color_hex: str, running: bool = Fa
     # Top bookmark dot / accent bar
     p.setBrush(col.lighter(120))
     p.drawRoundedRect(QRectF(w * 0.42, h * 0.34, w * 0.34, h * 0.12), 1.0, 1.0)
-    p.setBrush(QColor("#B8B2CA"))
+    p.setBrush(QColor("#BCBCBC"))
     p.drawRoundedRect(QRectF(w * 0.42, h * 0.54, w * 0.26, h * 0.10), 1.0, 1.0)
     if running:
         p.setPen(_pen("#1B1B1C", max(1.2, w * 0.08)))
@@ -135,7 +135,7 @@ def _draw_save(p: QPainter, r: QRectF, accent: str = "#0088F0") -> None:
     p.drawRoundedRect(QRectF(w * 0.14, h * 0.14, w * 0.72, h * 0.72), 2.5, 2.5)
     p.setBrush(QColor("#E8F2FF"))
     p.drawRoundedRect(QRectF(w * 0.28, h * 0.14, w * 0.38, h * 0.26), 1.0, 1.0)
-    p.setBrush(QColor("#1E1C25"))
+    p.setBrush(QColor("#1E1E1E"))
     p.drawRoundedRect(QRectF(w * 0.50, h * 0.17, w * 0.09, h * 0.18), 0.8, 0.8)
     p.setBrush(QColor("#FFC114"))
     p.drawRoundedRect(QRectF(w * 0.25, h * 0.54, w * 0.50, h * 0.28), 1.5, 1.5)
@@ -242,7 +242,7 @@ def _draw_delete(p: QPainter, r: QRectF) -> None:
     p.setPen(Qt.PenStyle.NoPen)
     p.setBrush(QColor("#E45383"))
     p.drawRoundedRect(QRectF(w * 0.28, h * 0.34, w * 0.44, h * 0.48), 2.0, 2.0)
-    p.setPen(_pen("#1E1C25", max(1.1, w * 0.07)))
+    p.setPen(_pen("#1B1B1B", max(1.1, w * 0.07)))
     p.drawLine(QPointF(w * 0.42, h * 0.44), QPointF(w * 0.42, h * 0.72))
     p.drawLine(QPointF(w * 0.58, h * 0.44), QPointF(w * 0.58, h * 0.72))
 
@@ -262,7 +262,7 @@ def _draw_zoom(p: QPainter, r: QRectF, mode: str) -> None:
 def _draw_terminal(p: QPainter, r: QRectF) -> None:
     w, h = r.width(), r.height()
     p.setPen(Qt.PenStyle.NoPen)
-    p.setBrush(QColor("#2F2646"))
+    p.setBrush(QColor("#242424"))
     p.drawRoundedRect(QRectF(w * 0.10, h * 0.18, w * 0.80, h * 0.64), 2.5, 2.5)
     p.setPen(_pen("#00CCF9", max(1.4, w * 0.09)))
     p.drawLine(QPointF(w * 0.24, h * 0.36), QPointF(w * 0.40, h * 0.50))
@@ -277,7 +277,7 @@ def _draw_palette(p: QPainter, r: QRectF) -> None:
     for y_rel, col in ((0.18, "#32A6FF"), (0.42, "#A071EE"), (0.66, "#00C753")):
         p.setBrush(QColor(col))
         p.drawRoundedRect(QRectF(w * 0.16, h * y_rel, w * 0.22, h * 0.16), 1.5, 1.5)
-        p.setBrush(QColor("#CFC8E0"))
+        p.setBrush(QColor("#C8C8C8"))
         p.drawRoundedRect(QRectF(w * 0.44, h * (y_rel + 0.02), w * 0.40, h * 0.12), 1.5, 1.5)
 
 
@@ -505,7 +505,7 @@ def draw_node_type_icon(p: QPainter, rect: QRectF, node_type: NodeType) -> None:
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QColor(accent))
         p.drawRoundedRect(QRectF(x + w * 0.20, y + h * 0.14, w * 0.60, h * 0.72), 2.5, 2.5)
-        p.setBrush(QColor("#1E1C25"))
+        p.setBrush(QColor("#1E1E1E"))
         p.drawEllipse(QRectF(x + w * 0.32, y + h * 0.40, w * 0.36, h * 0.36))
         p.setBrush(QColor("#FFC114" if node_type == NodeType.SPEAKER_OUTPUT else "#00CCF9"))
         p.drawEllipse(QRectF(x + w * 0.42, y + h * 0.50, w * 0.16, h * 0.16))

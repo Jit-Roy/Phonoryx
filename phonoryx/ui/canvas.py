@@ -1337,7 +1337,7 @@ class NodeItem(QGraphicsObject):
             self.model.node_type,
         )
 
-        painter.setPen(QColor(COMFY_TEXT_PRIMARY if selected else "#ECEAF3"))
+        painter.setPen(QColor(COMFY_TEXT_PRIMARY if selected else "#EDEDED"))
         painter.setFont(QFont("Segoe UI", 9, QFont.Weight.DemiBold))
         title = painter.fontMetrics().elidedText(
             f"#{self.model.id} {self.model.display_title()}",
@@ -1386,7 +1386,7 @@ class NodeItem(QGraphicsObject):
         bar_w = max(40.0, w - 28.0)
         bar_y = h - 11.0
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor("#181620"))
+        painter.setBrush(QColor("#1A1A1A"))
         painter.drawRoundedRect(QRectF(10, bar_y, bar_w, 3), 1.5, 1.5)
         painter.drawRoundedRect(QRectF(10, bar_y + 4, bar_w, 3), 1.5, 1.5)
 
@@ -1502,7 +1502,7 @@ class GroupItem(QGraphicsRectItem):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         base = QColor(self.group.color)
         fill = QColor(base.red(), base.green(), base.blue(), 42)
-        border = QColor(NODE_SELECTED_BORDER if self.isSelected() else "#5E5773")
+        border = QColor(NODE_SELECTED_BORDER if self.isSelected() else "#595959")
         painter.setPen(QPen(border, 1.5, Qt.PenStyle.DashLine))
         painter.setBrush(fill)
         painter.drawRoundedRect(r, 10, 10)
