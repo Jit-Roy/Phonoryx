@@ -179,15 +179,19 @@ class LeftPalettePanel(QWidget):
     def _populate_palette(self) -> None:
         self.palette_list.clear()
         sections = [
-            ("--- SOURCE NODES ---", NodeCategory.SOURCE, "#32A6FF", "#1E1E1E"),
-            ("--- PROCESSING NODES ---", NodeCategory.PROCESSING, "#FFC114", "#1E1E1E"),
-            ("--- OUTPUT NODES ---", NodeCategory.OUTPUT, "#00C753", "#1E1E1E"),
+            ("SOURCE NODES", NodeCategory.SOURCE),
+            ("PROCESSING NODES", NodeCategory.PROCESSING),
+            ("OUTPUT NODES", NodeCategory.OUTPUT),
         ]
-        for header, cat, fg_hex, bg_hex in sections:
-            h_item = QListWidgetItem(header)
+        for header, cat in sections:
+            h_item = QListWidgetItem(f"  {header}")
             h_item.setFlags(Qt.ItemFlag.NoItemFlags)
-            h_item.setForeground(QColor(fg_hex))
-            h_item.setBackground(QColor(bg_hex))
+            h_item.setForeground(QColor("#6A6A6A"))
+            h_item.setBackground(QColor("#1A1A1A"))
+            font = h_item.font()
+            font.setFamily("Segoe UI")
+            font.setPointSize(8)
+            h_item.setFont(font)
             self.palette_list.addItem(h_item)
             for nt, spec in NODE_SPECS.items():
                 if spec.category == cat:

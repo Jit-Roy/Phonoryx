@@ -382,51 +382,57 @@ def draw_node_type_icon(p: QPainter, rect: QRectF, node_type: NodeType) -> None:
     p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
 
     if node_type == NodeType.APP_CAPTURE:
+        # App window in accent + white play arrow
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QColor(accent))
-        p.drawRoundedRect(QRectF(x + w * 0.12, y + h * 0.16, w * 0.76, h * 0.68), 2.5, 2.5)
-        p.setBrush(QColor("#00CCF9"))
-        p.drawEllipse(QRectF(x + w * 0.30, y + h * 0.50, w * 0.20, h * 0.20))
-        p.setPen(_pen("#FFFFFF", max(1.2, w * 0.08)))
-        p.drawLine(QPointF(x + w * 0.48, y + h * 0.58), QPointF(x + w * 0.48, y + h * 0.30))
-        p.drawLine(QPointF(x + w * 0.48, y + h * 0.30), QPointF(x + w * 0.68, y + h * 0.36))
+        p.drawRoundedRect(QRectF(x + w * 0.10, y + h * 0.16, w * 0.80, h * 0.68), 2.5, 2.5)
+        p.setBrush(QColor("#FFFFFF"))
+        p.drawPolygon(QPolygonF([
+            QPointF(x + w * 0.38, y + h * 0.36),
+            QPointF(x + w * 0.74, y + h * 0.50),
+            QPointF(x + w * 0.38, y + h * 0.64),
+        ]))
 
     elif node_type == NodeType.SYSTEM_CAPTURE:
-        p.setPen(_pen(accent, max(1.3, w * 0.09)))
-        p.setBrush(QColor("#1B2D48"))
-        p.drawRoundedRect(QRectF(x + w * 0.12, y + h * 0.18, w * 0.76, h * 0.50), 2.0, 2.0)
-        p.drawLine(QPointF(x + w * 0.34, y + h * 0.80), QPointF(x + w * 0.66, y + h * 0.80))
-        p.setPen(_pen("#00C753", max(1.3, w * 0.08)))
-        p.drawLine(QPointF(x + w * 0.32, y + h * 0.36), QPointF(x + w * 0.32, y + h * 0.50))
-        p.drawLine(QPointF(x + w * 0.50, y + h * 0.28), QPointF(x + w * 0.50, y + h * 0.56))
-        p.drawLine(QPointF(x + w * 0.68, y + h * 0.34), QPointF(x + w * 0.68, y + h * 0.52))
-
-    elif node_type in (NodeType.MIC_INPUT, NodeType.VIRTUAL_INPUT):
+        # Monitor in accent + white waveform bars
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QColor(accent))
-        p.drawRoundedRect(QRectF(x + w * 0.34, y + h * 0.14, w * 0.32, h * 0.46), 3.0, 3.0)
-        p.setPen(_pen("#FFC114" if node_type == NodeType.MIC_INPUT else "#00CCF9", max(1.3, w * 0.08)))
+        p.drawRoundedRect(QRectF(x + w * 0.12, y + h * 0.16, w * 0.76, h * 0.52), 2.0, 2.0)
+        p.drawRoundedRect(QRectF(x + w * 0.38, y + h * 0.68, w * 0.24, h * 0.14), 1.0, 1.0)
+        p.setBrush(QColor("#FFFFFF"))
+        for xr, top in ((0.24, 0.42), (0.40, 0.30), (0.56, 0.38), (0.72, 0.28)):
+            p.drawRoundedRect(QRectF(x + w * xr, y + h * top, w * 0.10, h * (0.56 - top)), 1.0, 1.0)
+
+    elif node_type in (NodeType.MIC_INPUT, NodeType.VIRTUAL_INPUT):
+        # Microphone capsule in accent + white stand/arc
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(accent))
+        p.drawRoundedRect(QRectF(x + w * 0.36, y + h * 0.14, w * 0.28, h * 0.44), 3.0, 3.0)
+        p.setPen(_pen("#FFFFFF", max(1.3, w * 0.08)))
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawArc(QRectF(x + w * 0.24, y + h * 0.28, w * 0.52, h * 0.42), 180 * 16, 180 * 16)
         p.drawLine(QPointF(x + w * 0.50, y + h * 0.70), QPointF(x + w * 0.50, y + h * 0.84))
         p.drawLine(QPointF(x + w * 0.34, y + h * 0.84), QPointF(x + w * 0.66, y + h * 0.84))
 
     elif node_type == NodeType.VOLUME:
+        # Speaker shape in accent + white arc waves
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QColor(accent))
         p.drawPolygon(QPolygonF([
-            QPointF(x + w * 0.16, y + h * 0.38),
-            QPointF(x + w * 0.34, y + h * 0.38),
-            QPointF(x + w * 0.54, y + h * 0.20),
-            QPointF(x + w * 0.54, y + h * 0.80),
-            QPointF(x + w * 0.34, y + h * 0.62),
-            QPointF(x + w * 0.16, y + h * 0.62),
+            QPointF(x + w * 0.14, y + h * 0.38),
+            QPointF(x + w * 0.32, y + h * 0.38),
+            QPointF(x + w * 0.52, y + h * 0.20),
+            QPointF(x + w * 0.52, y + h * 0.80),
+            QPointF(x + w * 0.32, y + h * 0.62),
+            QPointF(x + w * 0.14, y + h * 0.62),
         ]))
-        p.setPen(_pen("#00CCF9", max(1.3, w * 0.08)))
-        p.drawArc(QRectF(x + w * 0.48, y + h * 0.30, w * 0.26, h * 0.40), -55 * 16, 110 * 16)
-        p.drawArc(QRectF(x + w * 0.54, y + h * 0.20, w * 0.34, h * 0.60), -50 * 16, 100 * 16)
+        p.setPen(_pen("#FFFFFF", max(1.3, w * 0.08)))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawArc(QRectF(x + w * 0.52, y + h * 0.32, w * 0.22, h * 0.36), -55 * 16, 110 * 16)
+        p.drawArc(QRectF(x + w * 0.60, y + h * 0.22, w * 0.28, h * 0.56), -50 * 16, 100 * 16)
 
     elif node_type == NodeType.GAIN:
+        # Lightning bolt in accent
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QColor(accent))
         p.drawPolygon(QPolygonF([
@@ -439,84 +445,85 @@ def draw_node_type_icon(p: QPainter, rect: QRectF, node_type: NodeType) -> None:
         ]))
 
     elif node_type == NodeType.MIXER:
-        p.setPen(_pen("#B49EDE", max(1.2, w * 0.08)))
-        for idx, (xr, yr, col) in enumerate((
-            (0.24, 0.34, "#32A6FF"),
-            (0.50, 0.62, accent),
-            (0.76, 0.42, "#00C753"),
-        )):
-            p.setPen(_pen("#7D7594", max(1.2, w * 0.07)))
-            p.drawLine(QPointF(x + w * xr, y + h * 0.16), QPointF(x + w * xr, y + h * 0.84))
-            p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(QColor(col))
-            p.drawEllipse(QRectF(x + w * (xr - 0.10), y + h * (yr - 0.10), w * 0.20, h * 0.20))
+        # Fader tracks in accent + white fader heads
+        p.setPen(_pen(accent, max(1.4, w * 0.08)))
+        for xr in (0.28, 0.50, 0.72):
+            p.drawLine(QPointF(x + w * xr, y + h * 0.18), QPointF(x + w * xr, y + h * 0.82))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor("#FFFFFF"))
+        for xr, yr in ((0.28, 0.38), (0.50, 0.60), (0.72, 0.42)):
+            p.drawEllipse(QRectF(x + w * (xr - 0.09), y + h * (yr - 0.09), w * 0.18, h * 0.18))
 
     elif node_type == NodeType.SPLITTER:
+        # Y-fork in accent + white endpoint dots
         p.setPen(_pen(accent, max(1.4, w * 0.09)))
         p.drawLine(QPointF(x + w * 0.16, y + h * 0.50), QPointF(x + w * 0.44, y + h * 0.50))
-        p.drawLine(QPointF(x + w * 0.44, y + h * 0.50), QPointF(x + w * 0.76, y + h * 0.26))
-        p.drawLine(QPointF(x + w * 0.44, y + h * 0.50), QPointF(x + w * 0.76, y + h * 0.74))
+        p.drawLine(QPointF(x + w * 0.44, y + h * 0.50), QPointF(x + w * 0.80, y + h * 0.26))
+        p.drawLine(QPointF(x + w * 0.44, y + h * 0.50), QPointF(x + w * 0.80, y + h * 0.74))
         p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QColor("#FFC114"))
-        p.drawEllipse(QRectF(x + w * 0.70, y + h * 0.18, w * 0.16, h * 0.16))
-        p.setBrush(QColor("#00C753"))
-        p.drawEllipse(QRectF(x + w * 0.70, y + h * 0.66, w * 0.16, h * 0.16))
+        p.setBrush(QColor("#FFFFFF"))
+        p.drawEllipse(QRectF(x + w * 0.74, y + h * 0.18, w * 0.14, h * 0.14))
+        p.drawEllipse(QRectF(x + w * 0.74, y + h * 0.68, w * 0.14, h * 0.14))
 
     elif node_type == NodeType.MUTE:
+        # Speaker in accent + white X
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QColor(accent))
         p.drawPolygon(QPolygonF([
-            QPointF(x + w * 0.16, y + h * 0.38),
-            QPointF(x + w * 0.34, y + h * 0.38),
-            QPointF(x + w * 0.54, y + h * 0.20),
-            QPointF(x + w * 0.54, y + h * 0.80),
-            QPointF(x + w * 0.34, y + h * 0.62),
-            QPointF(x + w * 0.16, y + h * 0.62),
+            QPointF(x + w * 0.14, y + h * 0.38),
+            QPointF(x + w * 0.32, y + h * 0.38),
+            QPointF(x + w * 0.52, y + h * 0.20),
+            QPointF(x + w * 0.52, y + h * 0.80),
+            QPointF(x + w * 0.32, y + h * 0.62),
+            QPointF(x + w * 0.14, y + h * 0.62),
         ]))
         p.setPen(_pen("#FFFFFF", max(1.4, w * 0.09)))
-        p.drawLine(QPointF(x + w * 0.66, y + h * 0.34), QPointF(x + w * 0.84, y + h * 0.66))
-        p.drawLine(QPointF(x + w * 0.84, y + h * 0.34), QPointF(x + w * 0.66, y + h * 0.66))
+        p.drawLine(QPointF(x + w * 0.64, y + h * 0.34), QPointF(x + w * 0.84, y + h * 0.66))
+        p.drawLine(QPointF(x + w * 0.84, y + h * 0.34), QPointF(x + w * 0.64, y + h * 0.66))
 
     elif node_type in (NodeType.STEREO_TO_MONO, NodeType.MONO_TO_STEREO):
+        # Overlapping circles in accent + white arrow indicating direction
         p.setPen(_pen(accent, max(1.4, w * 0.09)))
         p.setBrush(Qt.BrushStyle.NoBrush)
-        p.drawEllipse(QRectF(x + w * 0.14, y + h * 0.28, w * 0.44, h * 0.44))
-        p.setPen(_pen("#00CCF9", max(1.4, w * 0.09)))
-        p.drawEllipse(QRectF(x + w * 0.42, y + h * 0.28, w * 0.44, h * 0.44))
+        p.drawEllipse(QRectF(x + w * 0.10, y + h * 0.26, w * 0.40, h * 0.40))
+        p.drawEllipse(QRectF(x + w * 0.18, y + h * 0.34, w * 0.40, h * 0.40))
+        p.setPen(_pen("#FFFFFF", max(1.3, w * 0.08)))
+        if node_type == NodeType.STEREO_TO_MONO:
+            p.drawLine(QPointF(x + w * 0.60, y + h * 0.50), QPointF(x + w * 0.84, y + h * 0.50))
+        else:
+            p.drawLine(QPointF(x + w * 0.60, y + h * 0.38), QPointF(x + w * 0.84, y + h * 0.38))
+            p.drawLine(QPointF(x + w * 0.60, y + h * 0.62), QPointF(x + w * 0.84, y + h * 0.62))
 
     elif node_type == NodeType.CHANNEL_MAP:
+        # Crossing lines in accent (two colors same accent for the two channels)
         p.setPen(_pen(accent, max(1.4, w * 0.09)))
-        p.drawLine(QPointF(x + w * 0.18, y + h * 0.32), QPointF(x + w * 0.82, y + h * 0.68))
-        p.setPen(_pen("#32A6FF", max(1.4, w * 0.09)))
-        p.drawLine(QPointF(x + w * 0.18, y + h * 0.68), QPointF(x + w * 0.82, y + h * 0.32))
+        p.drawLine(QPointF(x + w * 0.18, y + h * 0.30), QPointF(x + w * 0.82, y + h * 0.70))
+        p.drawLine(QPointF(x + w * 0.18, y + h * 0.70), QPointF(x + w * 0.82, y + h * 0.30))
 
     elif node_type == NodeType.EQUALIZER:
+        # 4 bars all in accent (single color EQ)
         p.setPen(Qt.PenStyle.NoPen)
-        for xr, top_rel, col in (
-            (0.14, 0.48, "#32A6FF"),
-            (0.33, 0.22, "#A071EE"),
-            (0.52, 0.38, "#FFC114"),
-            (0.71, 0.26, "#00C753"),
-        ):
-            p.setBrush(QColor(col))
+        p.setBrush(QColor(accent))
+        for xr, top_rel in ((0.14, 0.48), (0.33, 0.22), (0.52, 0.38), (0.71, 0.26)):
             p.drawRoundedRect(QRectF(x + w * xr, y + h * top_rel, w * 0.14, h * (0.86 - top_rel)), 1.2, 1.2)
 
     elif node_type in (NodeType.SPEAKER_OUTPUT, NodeType.VIRTUAL_OUTPUT):
+        # Speaker box in accent + white cone ring + accent center
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QColor(accent))
         p.drawRoundedRect(QRectF(x + w * 0.20, y + h * 0.14, w * 0.60, h * 0.72), 2.5, 2.5)
-        p.setBrush(QColor("#1E1E1E"))
-        p.drawEllipse(QRectF(x + w * 0.32, y + h * 0.40, w * 0.36, h * 0.36))
-        p.setBrush(QColor("#FFC114" if node_type == NodeType.SPEAKER_OUTPUT else "#00CCF9"))
-        p.drawEllipse(QRectF(x + w * 0.42, y + h * 0.50, w * 0.16, h * 0.16))
+        p.setBrush(QColor("#FFFFFF"))
+        p.drawEllipse(QRectF(x + w * 0.33, y + h * 0.38, w * 0.34, h * 0.34))
+        p.setBrush(QColor(accent))
+        p.drawEllipse(QRectF(x + w * 0.42, y + h * 0.47, w * 0.16, h * 0.16))
 
     elif node_type == NodeType.FILE_RECORDING:
-        p.setPen(_pen("#EC5158", max(1.3, w * 0.09)))
-        p.setBrush(QColor("#2F1B24"))
-        p.drawEllipse(QRectF(x + w * 0.16, y + h * 0.16, w * 0.68, h * 0.68))
+        # Record circle in accent + white center dot
         p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QColor("#EC5158"))
-        p.drawEllipse(QRectF(x + w * 0.34, y + h * 0.34, w * 0.32, h * 0.32))
+        p.setBrush(QColor(accent))
+        p.drawEllipse(QRectF(x + w * 0.16, y + h * 0.16, w * 0.68, h * 0.68))
+        p.setBrush(QColor("#FFFFFF"))
+        p.drawEllipse(QRectF(x + w * 0.36, y + h * 0.36, w * 0.28, h * 0.28))
 
     p.restore()
 
