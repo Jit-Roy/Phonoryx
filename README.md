@@ -78,7 +78,7 @@ The standalone bundle is written to `dist\Phonoryx\Phonoryx.exe`. End users can 
 
 ## Cache Location
 
-Phonoryx stores its workspace cache (`workspace_cache.json` — open tabs, node layouts, device/app selections, and dock state) at the same system `LocalAppData` path pattern as PyCam:
+Phonoryx stores its workspace cache (`workspace_cache.json` — open tabs, node layouts, device/app selections, and dock state) in the Windows `LocalAppData` folder:
 
 ```text
 %LOCALAPPDATA%\Phonoryx
@@ -86,6 +86,40 @@ Phonoryx stores its workspace cache (`workspace_cache.json` — open tabs, node 
 
 (Typically `C:\Users\<YourUsername>\AppData\Local\Phonoryx\workspace_cache.json`.)
 
-## License
+## Supported Virtual Audio Drivers
 
-This project is licensed under the **MIT License** — see the [LICENSE](LICENSE) file for full details.
+Phonoryx detects and integrates with standard Windows virtual audio drivers through WASAPI shared mode. The engine's `DeviceManager` automatically recognizes virtual endpoints by inspecting driver friendly names (matching `virtual`, `cable`, `voicemeeter`, and `wave link`):
+
+- **VB-Audio CABLE**: VB-Cable Standard, A+B, and C+D virtual audio cables.
+- **VB-Audio VoiceMeeter**: VoiceMeeter Input / Output, VoiceMeeter Aux, and VoiceMeeter VAIO3.
+- **Virtual Audio Cable (VAC)**: Eugene Muzychenko VAC lines 1–N.
+- **Elgato Wave Link**: Virtual routing channels (System, Game, Music, Browser, Voice Chat, SFX, Aux).
+- **Windows Virtual & Loopback Endpoints**: Steam Streaming Audio, OBS Virtual Audio, and system-defined virtual endpoints.
+
+Virtual inputs and outputs are marked with `is_virtual = true` in device lists, allowing Phonoryx to route inter-application audio without hardware loopback cables.
+
+## Real-World Round-Trip Latency & Buffer Architecture
+
+Phonoryx is engineered for real-time low-latency audio processing:
+
+| Metric | Configured Target | Purpose |
+| :--- | :--- | :--- |
+| **Capture Target** | **10 ms** (480 frames @ 48 kHz) | Minimized input buffering with 4 ms deadband to prevent drift hunting |
+| **Render Buffer** | **20 ms** (shared-mode duration) | Tuned shared-mode WASAPI buffer with 10 ms prebuffer |
+| **Render Target** | **10 ms** (480 frames @ 48 kHz) | Low latency output pacing with 4 ms deadband |
+| **DSP Block Size** | **10 ms** (480 frames @ 48 kHz) | Remainder-compensated high-resolution RT clock |
+| **Algorithmic Delay** | **1 block (10.0 ms)** | Measured via automated click-impulse latency tests |
+| **Total Software Path** | **~20 ms** | Total buffer latency from capture ring to render ring |
+
+### Slaved Primary Output Clocking
+To eliminate audio drift and minimize latency on the primary output, Phonoryx slaves the real-time processing loop directly to the primary physical speaker DAC (`AF_NODE_SPEAKER_OUTPUT`). When the master DAC requests a block of audio via WASAPI's hardware event callback, it signals the engine tick directly. This removes a drift resampling stage on the primary output (`drift = 1.0`). Secondary outputs and capture endpoints drift-trim against this master clock. If the master DAC is disconnected or stalls, the engine automatically falls back to a high-resolution multimedia timer (`CREATE_WAITABLE_TIMER_HIGH_RESOLUTION`) with a 25 ms watchdog timeout, ensuring zero freezes or audio stutters.
+
+### Parameter Validation & Output Soft Limiter
+All node parameters are strictly sanitized both in the Python UI layer and inside the C++ engine (`volume` ∈ [0.0, 2.0], `gain_db` ∈ [-60.0, +24.0] dB, `eq_gains` ∈ [-18.0, +18.0] dB). Additionally, every audio signal routed to an output node (speakers, virtual cables, WAV recorder, or test sinks) passes through a hyperbolic tangent (`tanh`) soft limiter before transmission, ensuring signals remain safely within `[-1.0, +1.0]` with smooth saturation rather than harsh digital clipping.
+
+## License & Third-Party Notices
+
+This project is licensed under the **MIT License** — see the [LICENSE](LICENSE) file for details.
+
+### Third-Party Libraries (LGPLv3)
+Phonoryx utilizes **PySide6** and **Qt6**, which are licensed under the **GNU Lesser General Public License version 3 (LGPLv3)**. Phonoryx interfaces with Qt dynamically via shared libraries (`.pyd` and `.dll`). In compliance with LGPLv3, users have the right to inspect, modify, and relink the Qt/PySide6 libraries used by Phonoryx (including replacing the Qt binaries inside `_internal/PySide6/` in the standalone distribution). Upstream Qt source code is available at [qt.io](https://download.qt.io/official_releases/qt/) and [code.qt.io](https://code.qt.io/cgit/pyside/pyside-setup.git).

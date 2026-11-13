@@ -45,7 +45,7 @@ set_target_properties(phonoryx_engine PROPERTIES
 )
 
 add_executable(phonoryx_tests
-    tests/test_main.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tests/test_engine.cpp
     ${ENGINE_SOURCES}
 )
 target_include_directories(phonoryx_tests PRIVATE

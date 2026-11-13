@@ -50,9 +50,11 @@ struct Value {
 
 class Parser {
 public:
+    static constexpr size_t kMaxDepth = 128;
     explicit Parser(const char* text) : p_(text ? text : "") {}
 
     bool parse(Value& out, std::string& err) {
+        depth_ = 0;
         skip_ws();
         if (!parse_value(out, err)) return false;
         skip_ws();
@@ -65,12 +67,23 @@ public:
 
 private:
     const char* p_;
+    size_t depth_{0};
 
     void skip_ws() {
         while (*p_ && std::isspace(static_cast<unsigned char>(*p_))) ++p_;
     }
 
     bool parse_value(Value& out, std::string& err) {
+        if (depth_ >= kMaxDepth) {
+            err = "Maximum JSON nesting depth exceeded";
+            return false;
+        }
+        struct DepthGuard {
+            size_t& d;
+            explicit DepthGuard(size_t& depth_ref) : d(depth_ref) { ++d; }
+            ~DepthGuard() { --d; }
+        } guard(depth_);
+
         skip_ws();
         char c = *p_;
         if (c == '\0') { err = "Unexpected end of JSON"; return false; }
@@ -105,8 +118,8 @@ private:
             char c = *p_++;
             if (c == '"') return true;
             if (c == '\\') {
+                if (!*p_) { err = "Unterminated escape"; return false; }
                 char esc = *p_++;
-                if (!esc) { err = "Unterminated escape"; return false; }
                 switch (esc) {
                     case '"': out.push_back('"'); break;
                     case '\\': out.push_back('\\'); break;
@@ -119,6 +132,10 @@ private:
                     case 'u': {
                         unsigned int code = 0;
                         for (int i = 0; i < 4; ++i) {
+                            if (!*p_) {
+                                err = "Truncated \\u escape";
+                                return false;
+                            }
                             char h = *p_++;
                             if (!std::isxdigit(static_cast<unsigned char>(h))) {
                                 err = "Invalid \\u escape";
@@ -190,4 +207,9 @@ private:
 };
 
 } // namespace af::json
+
+namespace phonoryx {
+    namespace json = af::json;
+}
+
 

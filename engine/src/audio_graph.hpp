@@ -89,6 +89,17 @@ public:
     int32_t get_node_meters(af_node_meter_t* out, int32_t max_count);
     void get_stats(af_engine_stats_t* out);
 
+    // Slaved Primary Output Clocking telemetry & inspection
+    bool is_master_clock_active() const noexcept {
+        return master_clock_active_.load(std::memory_order_acquire);
+    }
+    uint64_t master_render_node_id() const noexcept {
+        return master_render_node_id_;
+    }
+    HANDLE master_tick_event() const noexcept {
+        return master_tick_event_;
+    }
+
     // Deterministic test helpers (also exercises exact RT execution path)
     void process_single_block(CompiledGraphSnapshot* snap);
     bool test_push_source_audio(uint64_t node_id, const float* stereo_in, size_t frames);
@@ -132,7 +143,19 @@ private:
     std::atomic<float> cpu_load_percent_{0.0f};
     std::thread rt_thread_;
     HANDLE stop_event_{nullptr};
+    HANDLE master_tick_event_{nullptr};
+    std::atomic<bool> master_clock_active_{false};
+    uint64_t master_render_node_id_{0};
 };
 
 } // namespace af
+
+namespace phonoryx {
+    using af::AudioEngine;
+    using af::GraphNodeSpec;
+    using af::GraphConnectionSpec;
+    using af::CompiledNode;
+    using af::CompiledGraphSnapshot;
+}
+
 

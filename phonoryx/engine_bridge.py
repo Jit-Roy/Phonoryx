@@ -215,6 +215,14 @@ def _decode_cstr(raw: bytes) -> str:
     return raw.decode("utf-8", errors="replace").rstrip("\x00")
 
 
+# Modern Phonoryx aliases for C ABI structs
+_PhonoryxDeviceInfo = _AfDeviceInfo
+_PhonoryxProcessInfo = _AfProcessInfo
+_PhonoryxNodeMeter = _AfNodeMeter
+_PhonoryxEngineStats = _AfEngineStats
+_PhonoryxLogEntry = _AfLogEntry
+
+
 class PhonoryxEngine:
     """Thread-safe high-level wrapper over the native C++ audio engine DLL."""
 
@@ -227,87 +235,84 @@ class PhonoryxEngine:
         resolved = dll_path if dll_path is not None else find_engine_dll()
         self._lib = ctypes.CDLL(str(resolved))
         self._bind_signatures()
-        self._handle = self._lib.af_engine_create(
-            ctypes.c_uint32(sample_rate), ctypes.c_uint32(block_frames)
-        )
+        self._handle = self._call_create(sample_rate, block_frames)
         if not self._handle:
-            raise RuntimeError("af_engine_create returned NULL")
+            raise RuntimeError("phonoryx_engine_create returned NULL")
 
     def _bind_signatures(self) -> None:
         lib = self._lib
         c_void_p = ctypes.c_void_p
 
-        lib.af_engine_create.argtypes = [ctypes.c_uint32, ctypes.c_uint32]
-        lib.af_engine_create.restype = c_void_p
+        def bind(primary: str, fallback: str, argtypes, restype):
+            func = getattr(lib, primary, None)
+            if func is None:
+                func = getattr(lib, fallback)
+            func.argtypes = argtypes
+            func.restype = restype
+            setattr(self, f"_{fallback}", func)
+            setattr(self, f"_{primary}", func)
+            # Ensure lib attributes are bound as well for direct callers
+            setattr(lib, fallback, func)
+            setattr(lib, primary, func)
+            return func
 
-        lib.af_engine_destroy.argtypes = [c_void_p]
-        lib.af_engine_destroy.restype = None
+        self._fn_create = bind(
+            "phonoryx_engine_create", "af_engine_create",
+            [ctypes.c_uint32, ctypes.c_uint32], c_void_p
+        )
+        self._fn_destroy = bind(
+            "phonoryx_engine_destroy", "af_engine_destroy",
+            [c_void_p], None
+        )
+        self._fn_start = bind(
+            "phonoryx_engine_start", "af_engine_start",
+            [c_void_p], ctypes.c_int32
+        )
+        self._fn_stop = bind(
+            "phonoryx_engine_stop", "af_engine_stop",
+            [c_void_p], None
+        )
+        self._fn_enumerate_devices = bind(
+            "phonoryx_enumerate_devices", "af_enumerate_devices",
+            [c_void_p, ctypes.POINTER(_AfDeviceInfo), ctypes.c_int32], ctypes.c_int32
+        )
+        self._fn_get_device_change_seq = bind(
+            "phonoryx_get_device_change_seq", "af_get_device_change_seq",
+            [c_void_p], ctypes.c_uint64
+        )
+        self._fn_enumerate_processes = bind(
+            "phonoryx_enumerate_processes", "af_enumerate_processes",
+            [c_void_p, ctypes.POINTER(_AfProcessInfo), ctypes.c_int32], ctypes.c_int32
+        )
+        self._fn_graph_apply_json = bind(
+            "phonoryx_graph_apply_json", "af_graph_apply_json",
+            [c_void_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int32], ctypes.c_int32
+        )
+        self._fn_node_set_float_param = bind(
+            "phonoryx_node_set_float_param", "af_node_set_float_param",
+            [c_void_p, ctypes.c_uint64, ctypes.c_char_p, ctypes.c_float], ctypes.c_int32
+        )
+        self._fn_node_set_int_param = bind(
+            "phonoryx_node_set_int_param", "af_node_set_int_param",
+            [c_void_p, ctypes.c_uint64, ctypes.c_char_p, ctypes.c_int32], ctypes.c_int32
+        )
+        self._fn_get_node_meters = bind(
+            "phonoryx_get_node_meters", "af_get_node_meters",
+            [c_void_p, ctypes.POINTER(_AfNodeMeter), ctypes.c_int32], ctypes.c_int32
+        )
+        self._fn_get_engine_stats = bind(
+            "phonoryx_get_engine_stats", "af_get_engine_stats",
+            [c_void_p, ctypes.POINTER(_AfEngineStats)], ctypes.c_int32
+        )
+        self._fn_poll_logs = bind(
+            "phonoryx_poll_logs", "af_poll_logs",
+            [c_void_p, ctypes.POINTER(_AfLogEntry), ctypes.c_int32], ctypes.c_int32
+        )
 
-        lib.af_engine_start.argtypes = [c_void_p]
-        lib.af_engine_start.restype = ctypes.c_int32
-
-        lib.af_engine_stop.argtypes = [c_void_p]
-        lib.af_engine_stop.restype = None
-
-        lib.af_enumerate_devices.argtypes = [
-            c_void_p,
-            ctypes.POINTER(_AfDeviceInfo),
-            ctypes.c_int32,
-        ]
-        lib.af_enumerate_devices.restype = ctypes.c_int32
-
-        lib.af_get_device_change_seq.argtypes = [c_void_p]
-        lib.af_get_device_change_seq.restype = ctypes.c_uint64
-
-        lib.af_enumerate_processes.argtypes = [
-            c_void_p,
-            ctypes.POINTER(_AfProcessInfo),
-            ctypes.c_int32,
-        ]
-        lib.af_enumerate_processes.restype = ctypes.c_int32
-
-        lib.af_graph_apply_json.argtypes = [
-            c_void_p,
-            ctypes.c_char_p,
-            ctypes.c_char_p,
-            ctypes.c_int32,
-        ]
-        lib.af_graph_apply_json.restype = ctypes.c_int32
-
-        lib.af_node_set_float_param.argtypes = [
-            c_void_p,
-            ctypes.c_uint64,
-            ctypes.c_char_p,
-            ctypes.c_float,
-        ]
-        lib.af_node_set_float_param.restype = ctypes.c_int32
-
-        lib.af_node_set_int_param.argtypes = [
-            c_void_p,
-            ctypes.c_uint64,
-            ctypes.c_char_p,
-            ctypes.c_int32,
-        ]
-        lib.af_node_set_int_param.restype = ctypes.c_int32
-
-        lib.af_get_node_meters.argtypes = [
-            c_void_p,
-            ctypes.POINTER(_AfNodeMeter),
-            ctypes.c_int32,
-        ]
-        lib.af_get_node_meters.restype = ctypes.c_int32
-
-        lib.af_get_engine_stats.argtypes = [
-            c_void_p,
-            ctypes.POINTER(_AfEngineStats),
-        ]
-        lib.af_get_engine_stats.restype = ctypes.c_int32
-
-        lib.af_poll_logs.argtypes = [
-            c_void_p,
-            ctypes.POINTER(_AfLogEntry),
-            ctypes.c_int32,
-        ]
+    def _call_create(self, sample_rate: int, block_frames: int):
+        return self._fn_create(
+            ctypes.c_uint32(sample_rate), ctypes.c_uint32(block_frames)
+        )
         lib.af_poll_logs.restype = ctypes.c_int32
 
     def close(self) -> None:
@@ -389,17 +394,33 @@ class PhonoryxEngine:
             return False, "Engine closed"
         payload_bytes = json.dumps(graph_payload).encode("utf-8")
         err_buf = ctypes.create_string_buffer(512)
-        rc = self._lib.af_graph_apply_json(self._handle, payload_bytes, err_buf, 512)
+        rc = self._fn_graph_apply_json(self._handle, payload_bytes, err_buf, 512)
+        return rc == 0, err_buf.value.decode("utf-8", errors="replace")
+
+    def apply_graph_json(self, json_str: str) -> tuple[bool, str]:
+        if not self._handle:
+            return False, "Engine closed"
+        payload_bytes = json_str.encode("utf-8")
+        err_buf = ctypes.create_string_buffer(512)
+        rc = self._fn_graph_apply_json(self._handle, payload_bytes, err_buf, 512)
         return rc == 0, err_buf.value.decode("utf-8", errors="replace")
 
     def set_float_param(self, node_id: int, param_name: str, value: float) -> bool:
         if not self._handle:
             return False
+        # Sanitize parameters before sending across FFI boundary
+        val = float(value)
+        if param_name == "volume":
+            val = max(0.0, min(2.0, val))
+        elif param_name == "gain_db":
+            val = max(-60.0, min(24.0, val))
+        elif param_name.startswith("eq_band_"):
+            val = max(-18.0, min(18.0, val))
         rc = self._lib.af_node_set_float_param(
             self._handle,
             ctypes.c_uint64(node_id),
             param_name.encode("utf-8"),
-            ctypes.c_float(value),
+            ctypes.c_float(val),
         )
         return rc == 0
 

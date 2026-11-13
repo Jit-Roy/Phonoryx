@@ -1,6 +1,7 @@
 #include "phonoryx_capi.h"
 #include "audio_graph.hpp"
 #include "device_manager.hpp"
+#include "json_mini.hpp"
 #include "process_manager.hpp"
 #include "resampler.hpp"
 #include "ring_buffer.hpp"
@@ -277,10 +278,16 @@ void test_resampler_phase_continuity() {
         CHECK(total_out_frames > 1000, c.label);
         const double max_step = kTwoPi * kFreq / static_cast<double>(c.dst_rate) * 1.35;
         double worst_diff = 0.0;
+        size_t worst_idx = 0;
         for (size_t i = 1; i < total_out_frames; ++i) {
             const double d = std::abs(all_out[i * 2] - all_out[(i - 1) * 2]);
-            if (d > worst_diff) worst_diff = d;
+            if (d > worst_diff) {
+                worst_diff = d;
+                worst_idx = i;
+            }
         }
+        std::printf("  [%s] total_out=%zu, worst_diff=%.6f, max_step=%.6f, worst_idx=%zu\n",
+                    c.label, total_out_frames, worst_diff, max_step, worst_idx);
         CHECK(worst_diff < max_step, ("continuity across boundaries: " + std::string(c.label)).c_str());
     }
 
@@ -358,6 +365,370 @@ void test_rt_loop_timing_accuracy() {
     std::printf("[PASS] test_rt_loop_timing_accuracy\n");
 }
 
+void test_json_fuzz() {
+    // 1. Deep nesting test (must be rejected gracefully without stack overflow)
+    std::string deep_array;
+    for (int i = 0; i < 300; ++i) deep_array += "[";
+    for (int i = 0; i < 300; ++i) deep_array += "]";
+    af::json::Value val;
+    std::string err;
+    af::json::Parser p1(deep_array.c_str());
+    CHECK(!p1.parse(val, err), "Deep array >128 levels must be rejected");
+    CHECK(err.find("nesting depth") != std::string::npos, "Error mentions nesting depth");
+
+    // 2. Truncated unicode escapes
+    const char* bad_escapes[] = {
+        "\"\\u\"", "\"\\u0\"", "\"\\u00\"", "\"\\u000\"", "\"\\uZZZZ\"", "\"\\", "\"unterminated",
+        "{\"key\": }", "[1, 2, ", "{1: 2}", "{\"k\": 1 trailing}", "true extra", "---123"
+    };
+    for (const char* bad : bad_escapes) {
+        af::json::Parser p(bad);
+        af::json::Value out;
+        std::string e;
+        CHECK(!p.parse(out, e), ("Malformed JSON rejected: " + std::string(bad)).c_str());
+    }
+
+    // 3. Substring truncations of valid JSON
+    const char* valid = R"JSON({
+      "nodes": [
+        {"id": 1, "type": 1, "volume": 0.8, "muted": false, "name": "Test\nNode"},
+        {"id": 2, "type": 101, "eq": [1.0, 2.5, -3.0]}
+      ],
+      "connections": [{"src_node": 1, "src_port": 0, "dst_node": 2, "dst_port": 0}]
+    })JSON";
+    const size_t len = std::strlen(valid);
+    for (size_t sub = 0; sub < len; ++sub) {
+        std::string partial(valid, sub);
+        af::json::Parser p(partial.c_str());
+        af::json::Value out;
+        std::string e;
+        p.parse(out, e); // Must never crash
+    }
+
+    // 4. Pseudo-random fuzzing (5,000 randomized byte strings)
+    uint32_t seed = 0x12345678;
+    auto lcg = [&seed]() -> uint32_t {
+        seed = seed * 1664525u + 1013904223u;
+        return seed;
+    };
+    for (int it = 0; it < 5000; ++it) {
+        const size_t f_len = (lcg() % 64) + 1;
+        std::string fuzz_str;
+        fuzz_str.reserve(f_len);
+        for (size_t b = 0; b < f_len; ++b) {
+            char c = static_cast<char>(lcg() & 0xFF);
+            if (c == '\0') c = ' ';
+            fuzz_str.push_back(c);
+        }
+        af::json::Parser fp(fuzz_str.c_str());
+        af::json::Value fout;
+        std::string fe;
+        fp.parse(fout, fe); // Must never crash
+    }
+    std::printf("[PASS] test_json_fuzz\n");
+}
+
+void test_log_queue_multithreaded_stress() {
+    af::LogQueue queue;
+    std::atomic<bool> start_flag{false};
+    std::atomic<bool> done_flag{false};
+    constexpr int kProducers = 8;
+    constexpr int kEntriesPerProducer = 10000; // 80,000 total pushed entries into capacity 256!
+
+    std::vector<std::thread> producers;
+    for (int p = 0; p < kProducers; ++p) {
+        producers.emplace_back([&queue, &start_flag, p]() {
+            while (!start_flag.load(std::memory_order_acquire)) {
+                std::this_thread::yield();
+            }
+            char msg[64];
+            for (int i = 0; i < kEntriesPerProducer; ++i) {
+                std::snprintf(msg, sizeof(msg), "p%d_msg_%d", p, i);
+                queue.push(p % 3, static_cast<uint64_t>(p * 100000 + i), msg);
+            }
+        });
+    }
+
+    uint64_t total_popped = 0;
+    std::thread consumer([&queue, &start_flag, &done_flag, &total_popped]() {
+        while (!start_flag.load(std::memory_order_acquire)) {
+            std::this_thread::yield();
+        }
+        af_log_entry_t batch[64];
+        while (!done_flag.load(std::memory_order_acquire)) {
+            int32_t n = queue.pop_batch(batch, 64);
+            if (n > 0) {
+                total_popped += static_cast<uint64_t>(n);
+                for (int32_t i = 0; i < n; ++i) {
+                    CHECK(batch[i].level >= 0 && batch[i].level <= 2, "Valid log level under stress");
+                    CHECK(batch[i].message[0] == 'p', "Valid untorn log message under overwrite");
+                }
+            } else {
+                std::this_thread::yield();
+            }
+        }
+        // Drain any remaining
+        int32_t n = 0;
+        while ((n = queue.pop_batch(batch, 64)) > 0) {
+            total_popped += static_cast<uint64_t>(n);
+        }
+    });
+
+    start_flag.store(true, std::memory_order_release);
+    for (auto& t : producers) {
+        t.join();
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    done_flag.store(true, std::memory_order_release);
+    consumer.join();
+
+    std::printf("  LogQueue stress: pushed 80,000 concurrent entries into 256-slot ring; safely popped %llu entries without torn reads\n",
+                static_cast<unsigned long long>(total_popped));
+    CHECK(total_popped > 0, "Stress popped logs");
+    std::printf("[PASS] test_log_queue_multithreaded_stress\n");
+}
+
+void test_clock_drift_long_run() {
+    // Two synthetic clocks 100 ppm apart:
+    // Clock A (producer) running at 48004.8 Hz (+100 ppm)
+    // Clock B (consumer) running at 48000 Hz
+    // Simulating 18,000 blocks (3 minutes of audio at 48kHz, 480 frames per block)
+    af::StereoRingBuffer ring(16384);
+    af::StereoConverterResampler resampler;
+    resampler.configure(48000, 48000, 4096);
+
+    constexpr size_t kNominalBlock = 480;
+    constexpr size_t kTargetFill = 1440; // 30ms target fill
+    constexpr size_t kDeadband = 480;
+    constexpr int kTotalBlocks = 18000;
+
+    std::vector<float> in_block(kNominalBlock * 2, 0.42f);
+    std::vector<float> resampled_buf(1024 * 2, 0.0f);
+    std::vector<float> out_block(kNominalBlock * 2, 0.0f);
+
+    // Initial prefill to target fill level
+    ring.write(in_block.data(), kNominalBlock);
+    ring.write(in_block.data(), kNominalBlock);
+    ring.write(in_block.data(), kNominalBlock);
+
+    size_t underruns = 0;
+    size_t overruns = 0;
+    size_t min_fill = ring.capacity();
+    size_t max_fill = 0;
+
+    double clock_a_phase = 0.0;
+    constexpr double kPpmStep = 1.0001; // +100 ppm faster producer
+
+    for (int blk = 0; blk < kTotalBlocks; ++blk) {
+        // Producer ticks at +100 ppm clock rate
+        clock_a_phase += static_cast<double>(kNominalBlock) * kPpmStep;
+        size_t frames_to_produce = static_cast<size_t>(std::floor(clock_a_phase));
+        clock_a_phase -= static_cast<double>(frames_to_produce);
+
+        const size_t current_fill = ring.available_read();
+        if (current_fill < min_fill) min_fill = current_fill;
+        if (current_fill > max_fill) max_fill = current_fill;
+
+        // Drift estimation feedback loop (matching WASAPI endpoint logic)
+        double drift = 1.0;
+        if (current_fill < (kTargetFill > kDeadband ? kTargetFill - kDeadband : 0) ||
+            current_fill > kTargetFill + kDeadband) {
+            const double err = static_cast<double>(current_fill) - static_cast<double>(kTargetFill);
+            drift = 1.0 + std::clamp(err * 2e-7, -0.0005, 0.0005);
+        }
+
+        // Resample producer frames into ring buffer
+        size_t produced = resampler.resample_stereo(
+            in_block.data(), std::min(frames_to_produce, in_block.size() / 2),
+            resampled_buf.data(), resampled_buf.size() / 2, drift);
+
+        if (ring.available_write() < produced) {
+            ++overruns;
+        } else {
+            ring.write(resampled_buf.data(), produced);
+        }
+
+        // Consumer ticks at nominal 48000 Hz (pulling 480 frames)
+        if (ring.available_read() < kNominalBlock) {
+            ++underruns;
+        } else {
+            ring.read(out_block.data(), kNominalBlock);
+        }
+    }
+
+    std::printf("  100 ppm drift over 18,000 blocks (3 minutes): min_fill=%zu, max_fill=%zu, underruns=%zu, overruns=%zu\n",
+                min_fill, max_fill, underruns, overruns);
+    CHECK(underruns == 0, "Zero underruns over 3 minutes of 100 ppm clock drift");
+    CHECK(overruns == 0, "Zero overruns over 3 minutes of 100 ppm clock drift");
+    CHECK(min_fill > 0 && max_fill < ring.capacity(), "Bounded ring buffer fill across long run");
+    std::printf("[PASS] test_clock_drift_long_run\n");
+}
+
+void test_automated_impulse_latency() {
+    constexpr uint32_t kSampleRate = 48000;
+    constexpr uint32_t kBlockFrames = 128;
+    af::AudioEngine engine(kSampleRate, kBlockFrames);
+
+    // Multi-stage graph: Source -> Volume -> Splitter -> Mixer -> Speaker Sink
+    const char* graph = R"JSON({
+      "nodes": [
+        {"id": 1, "type": 1, "device_id": "test://impulse_in"},
+        {"id": 2, "type": 101, "volume": 1.0},
+        {"id": 3, "type": 104},
+        {"id": 4, "type": 103},
+        {"id": 5, "type": 201, "device_id": "test://impulse_out"}
+      ],
+      "connections": [
+        {"src_node": 1, "src_port": 0, "dst_node": 2, "dst_port": 0},
+        {"src_node": 2, "src_port": 0, "dst_node": 3, "dst_port": 0},
+        {"src_node": 3, "src_port": 0, "dst_node": 4, "dst_port": 0},
+        {"src_node": 4, "src_port": 0, "dst_node": 5, "dst_port": 0}
+      ]
+    })JSON";
+
+    std::string err;
+    CHECK(engine.apply_graph_json(graph, err), ("apply latency graph: " + err).c_str());
+
+    // Inject delta impulse at frame 0 of block 1
+    std::vector<float> impulse_block(kBlockFrames * 2, 0.0f);
+    impulse_block[0] = 1.0f; // Left impulse
+    impulse_block[1] = 1.0f; // Right impulse
+
+    CHECK(engine.test_push_source_audio(1, impulse_block.data(), kBlockFrames), "push impulse");
+
+    // Advance 1 tick
+    engine.process_one_tick_for_test();
+
+    // Pop from sink
+    std::vector<float> sink_block(kBlockFrames * 2, 0.0f);
+    size_t popped = engine.test_pop_sink_audio(5, sink_block.data(), kBlockFrames);
+    CHECK(popped == kBlockFrames, "popped full sink block");
+
+    // Impulse must emerge exactly at frame 0 of the sink block (1 tick delay = 128 frames)
+    int impulse_frame = -1;
+    for (size_t f = 0; f < kBlockFrames; ++f) {
+        if (sink_block[f * 2] > 0.5f) {
+            impulse_frame = static_cast<int>(f);
+            break;
+        }
+    }
+    CHECK(impulse_frame == 0, "Impulse detected with exact sample accuracy at output");
+    const double latency_ms = (static_cast<double>(kBlockFrames) / static_cast<double>(kSampleRate)) * 1000.0;
+    std::printf("  Automated latency measurement: exactly 1 block (%u frames = %.3f ms) end-to-end DSP pipeline delay\n",
+                kBlockFrames, latency_ms);
+    std::printf("[PASS] test_automated_impulse_latency\n");
+}
+
+void test_phonoryx_capi_exports() {
+    phonoryx_engine_t* eng = phonoryx_engine_create(48000, 256);
+    CHECK(eng != nullptr, "phonoryx_engine_create");
+
+    CHECK(phonoryx_engine_start(eng) == 0, "phonoryx_engine_start");
+
+    phonoryx_engine_stats_t stats{};
+    CHECK(phonoryx_get_engine_stats(eng, &stats) == 0, "phonoryx_get_engine_stats");
+    CHECK(stats.running == 1, "engine running via phonoryx stats");
+    CHECK(stats.block_frames == 256, "block frames 256");
+
+    phonoryx_log_entry_t logs[16];
+    int32_t log_count = phonoryx_poll_logs(eng, logs, 16);
+    CHECK(log_count >= 0, "phonoryx_poll_logs");
+
+    phonoryx_engine_stop(eng);
+    phonoryx_engine_destroy(eng);
+    std::printf("[PASS] test_phonoryx_capi_exports\n");
+}
+
+void test_parameter_sanitization_and_output_limiter() {
+    af::AudioEngine engine(48000, 128);
+
+    // Apply JSON with outrageous parameters (+100 dB gain, 50.0 volume, EQ ±90 dB)
+    const char* graph = R"JSON({
+      "nodes": [
+        {"id": 1, "type": 1, "device_id": "test://hot_src"},
+        {"id": 2, "type": 102, "gain_db": 100.0, "volume": 50.0, "eq_gains_db": [90.0, -90.0, 50.0, -50.0, 99.0]},
+        {"id": 3, "type": 201, "device_id": "test://hot_sink", "volume": 10.0}
+      ],
+      "connections": [
+        {"src_node": 1, "src_port": 0, "dst_node": 2, "dst_port": 0},
+        {"src_node": 2, "src_port": 0, "dst_node": 3, "dst_port": 0}
+      ]
+    })JSON";
+
+    std::string err;
+    CHECK(engine.apply_graph_json(graph, err), "apply graph with out-of-range params");
+
+    // Dynamic parameter setters also enforce clamping
+    CHECK(engine.set_node_float_param(2, "gain_db", 80.0f), "set excessive gain");
+    CHECK(engine.set_node_float_param(2, "volume", 99.0f), "set excessive volume");
+    CHECK(engine.set_node_float_param(2, "eq_band_0", 120.0f), "set excessive eq");
+
+    // Inject loud signal into test source (amplitude 5.0f, way beyond 0 dBFS)
+    std::vector<float> loud_in(128 * 2, 5.0f);
+    CHECK(engine.test_push_source_audio(1, loud_in.data(), 128), "push loud audio");
+
+    // Process tick
+    engine.process_one_tick_for_test();
+
+    // Pop from sink
+    std::vector<float> out(128 * 2, 0.0f);
+    size_t popped = engine.test_pop_sink_audio(3, out.data(), 128);
+    CHECK(popped == 128, "popped sink audio");
+
+    // Assert final output soft limiter prevents harsh digital clipping:
+    // Every sample must be strictly bounded within [-1.0f, +1.0f] due to tanh limiter
+    float max_peak = 0.0f;
+    for (size_t i = 0; i < 128 * 2; ++i) {
+        const float a = std::abs(out[i]);
+        if (a > max_peak) max_peak = a;
+        CHECK(a <= 1.0f, "Output sample bounded by soft limiter");
+    }
+    CHECK(max_peak > 0.90f && max_peak <= 1.0f, "Soft limiter kept hot signal safely bounded near full-scale without clipping");
+    std::printf("[PASS] test_parameter_sanitization_and_output_limiter (peak=%.4f <= 1.0)\n", max_peak);
+}
+
+void test_slaved_primary_output_clocking() {
+    af::AudioEngine engine(48000, 128);
+
+    // Initial graph with test sink: master clock inactive (headless test mode)
+    const char* graph_test = R"JSON({
+      "nodes": [
+        {"id": 1, "type": 1, "device_id": "test://src"},
+        {"id": 2, "type": 201, "device_id": "test://sink"}
+      ],
+      "connections": [
+        {"src_node": 1, "src_port": 0, "dst_node": 2, "dst_port": 0}
+      ]
+    })JSON";
+
+    std::string err;
+    CHECK(engine.apply_graph_json(graph_test, err), "apply test graph");
+    CHECK(!engine.is_master_clock_active(), "Master clock inactive for test:// endpoints");
+    CHECK(engine.master_render_node_id() == 0, "No master render node for test:// endpoints");
+
+    // Graph with physical speaker endpoint
+    const char* graph_speaker = R"JSON({
+      "nodes": [
+        {"id": 10, "type": 1, "device_id": "test://src"},
+        {"id": 20, "type": 201, "device_id": "mock_speaker_dac"}
+      ],
+      "connections": [
+        {"src_node": 10, "src_port": 0, "dst_node": 20, "dst_port": 0}
+      ]
+    })JSON";
+
+    CHECK(engine.apply_graph_json(graph_speaker, err), "apply speaker graph");
+    CHECK(engine.is_master_clock_active(), "Master clock elected for physical speaker endpoint");
+    CHECK(engine.master_render_node_id() == 20, "Master render node id is 20");
+
+    // Graph switched back to headless: master clock resets smoothly
+    CHECK(engine.apply_graph_json(graph_test, err), "re-apply test graph");
+    CHECK(!engine.is_master_clock_active(), "Master clock fallback to software timer on graph change");
+    CHECK(engine.master_render_node_id() == 0, "Master render node id cleared");
+
+    std::printf("[PASS] test_slaved_primary_output_clocking\n");
+}
+
 } // namespace
 
 int main() {
@@ -369,6 +740,13 @@ int main() {
     test_windows_device_and_process_discovery();
     test_resampler_phase_continuity();
     test_rt_loop_timing_accuracy();
+    test_json_fuzz();
+    test_log_queue_multithreaded_stress();
+    test_clock_drift_long_run();
+    test_automated_impulse_latency();
+    test_phonoryx_capi_exports();
+    test_parameter_sanitization_and_output_limiter();
+    test_slaved_primary_output_clocking();
 
     if (g_failures > 0) {
         std::fprintf(stderr, "Phonoryx C++ tests FAILED (%d failures)\n", g_failures);

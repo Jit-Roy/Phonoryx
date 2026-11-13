@@ -131,5 +131,92 @@ AF_API int32_t af_poll_logs(
     return engine->impl.logs().pop_batch(out_logs, max_logs);
 }
 
+/* Modern Phonoryx C ABI exports */
+AF_API phonoryx_engine_t* phonoryx_engine_create(uint32_t sample_rate, uint32_t block_frames) {
+    return af_engine_create(sample_rate, block_frames);
+}
+
+AF_API void phonoryx_engine_destroy(phonoryx_engine_t* engine) {
+    af_engine_destroy(engine);
+}
+
+AF_API int32_t phonoryx_engine_start(phonoryx_engine_t* engine) {
+    return af_engine_start(engine);
+}
+
+AF_API void phonoryx_engine_stop(phonoryx_engine_t* engine) {
+    af_engine_stop(engine);
+}
+
+AF_API int32_t phonoryx_enumerate_devices(
+    phonoryx_engine_t* engine,
+    phonoryx_device_info_t* out_devices,
+    int32_t max_devices)
+{
+    return af_enumerate_devices(engine, out_devices, max_devices);
+}
+
+AF_API uint64_t phonoryx_get_device_change_seq(phonoryx_engine_t* engine) {
+    return af_get_device_change_seq(engine);
+}
+
+AF_API int32_t phonoryx_enumerate_processes(
+    phonoryx_engine_t* engine,
+    phonoryx_process_info_t* out_processes,
+    int32_t max_processes)
+{
+    return af_enumerate_processes(engine, out_processes, max_processes);
+}
+
+AF_API int32_t phonoryx_graph_apply_json(
+    phonoryx_engine_t* engine,
+    const char* graph_json,
+    char* err_buf,
+    int32_t err_cap)
+{
+    return af_graph_apply_json(engine, graph_json, err_buf, err_cap);
+}
+
+AF_API int32_t phonoryx_node_set_float_param(
+    phonoryx_engine_t* engine,
+    uint64_t node_id,
+    const char* param_name,
+    float value)
+{
+    return af_node_set_float_param(engine, node_id, param_name, value);
+}
+
+AF_API int32_t phonoryx_node_set_int_param(
+    phonoryx_engine_t* engine,
+    uint64_t node_id,
+    const char* param_name,
+    int32_t value)
+{
+    return af_node_set_int_param(engine, node_id, param_name, value);
+}
+
+AF_API int32_t phonoryx_get_node_meters(
+    phonoryx_engine_t* engine,
+    phonoryx_node_meter_t* out_meters,
+    int32_t max_meters)
+{
+    return af_get_node_meters(engine, out_meters, max_meters);
+}
+
+AF_API int32_t phonoryx_get_engine_stats(
+    phonoryx_engine_t* engine,
+    phonoryx_engine_stats_t* out_stats)
+{
+    return af_get_engine_stats(engine, out_stats);
+}
+
+AF_API int32_t phonoryx_poll_logs(
+    phonoryx_engine_t* engine,
+    phonoryx_log_entry_t* out_logs,
+    int32_t max_logs)
+{
+    return af_poll_logs(engine, out_logs, max_logs);
+}
+
 } // extern "C"
 

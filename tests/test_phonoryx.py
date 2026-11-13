@@ -1976,3 +1976,130 @@ def test_transient_status_save_and_refresh(qapp, tmp_path):
     finally:
         win.close()
 
+
+def test_dual_abi_exports_and_modern_phonoryx_bindings():
+    """Verify Phonoryx C ABI exports both phonoryx_* and af_* symbols and ctypes bindings."""
+    import ctypes
+    from phonoryx.engine_bridge import find_engine_dll, PhonoryxEngine, _PhonoryxDeviceInfo, _PhonoryxEngineStats
+
+    dll_path = find_engine_dll()
+    assert dll_path.is_file()
+
+    lib = ctypes.CDLL(str(dll_path))
+
+    # Assert both modern phonoryx_* and af_* symbols are exported
+    modern_symbols = [
+        "phonoryx_engine_create", "phonoryx_engine_destroy",
+        "phonoryx_engine_start", "phonoryx_engine_stop",
+        "phonoryx_enumerate_devices", "phonoryx_get_device_change_seq",
+        "phonoryx_enumerate_processes", "phonoryx_graph_apply_json",
+        "phonoryx_node_set_float_param", "phonoryx_node_set_int_param",
+        "phonoryx_get_node_meters", "phonoryx_get_engine_stats", "phonoryx_poll_logs"
+    ]
+    legacy_symbols = [
+        "af_engine_create", "af_engine_destroy",
+        "af_engine_start", "af_engine_stop",
+        "af_enumerate_devices", "af_get_device_change_seq",
+        "af_enumerate_processes", "af_graph_apply_json",
+        "af_node_set_float_param", "af_node_set_int_param",
+        "af_get_node_meters", "af_get_engine_stats", "af_poll_logs"
+    ]
+    for sym in modern_symbols:
+        assert hasattr(lib, sym), f"Missing modern export: {sym}"
+    for sym in legacy_symbols:
+        assert hasattr(lib, sym), f"Missing legacy export: {sym}"
+
+    # Verify high-level PhonoryxEngine wrapper
+    engine = PhonoryxEngine(sample_rate=48000, block_frames=256)
+    try:
+        assert engine.start()
+        stats = engine.get_engine_stats()
+        assert stats.running
+        assert stats.sample_rate == 48000
+        assert stats.block_frames == 256
+        assert _PhonoryxDeviceInfo is not None
+        assert _PhonoryxEngineStats is not None
+    finally:
+        engine.close()
+
+
+def test_json_fuzz_parser_robustness_in_engine():
+    """Verify that malformed, truncated, or deeply nested JSON is safely rejected without crashes."""
+    from phonoryx.engine_bridge import PhonoryxEngine
+
+    engine = PhonoryxEngine(sample_rate=48000, block_frames=128)
+    try:
+        # Deep nesting (>128 levels)
+        deep_nesting = "[" * 200 + "]" * 200
+        ok, err = engine.apply_graph_json(deep_nesting)
+        assert not ok
+        assert "depth" in err.lower() or "json" in err.lower()
+
+        # Malformed JSON tokens and escapes
+        bad_cases = [
+            '{"nodes": [{"id": 1, "type": }]}',
+            '{"nodes": [{"id": 1, "type": 1, "device_id": "\\u00"}]}',
+            '{"nodes": [{"id": 1, "type": 1',
+            '',
+            'null',
+            '{"nodes": [1, 2, 3]}',
+            '{"nodes": "not an array"}',
+            '{"connections": "invalid"}',
+        ]
+        for bad in bad_cases:
+            ok, err = engine.apply_graph_json(bad)
+            assert not ok, f"Expected failure for malformed JSON: {bad}"
+            assert err != ""
+    finally:
+        engine.close()
+
+
+def test_parameter_validation_and_sanitization():
+    """Verify that excessive or out-of-range parameters are clamped by model and bridge."""
+    # Model sanitization in to_engine_dict
+    node = NodeModel(
+        id=1,
+        node_type=NodeType.GAIN,
+        volume=50.0,
+        gain_db=120.0,
+        eq_gains_db=[50.0, -99.0, 30.0, 0.0, 15.0],
+    )
+    d = node.to_engine_dict()
+    assert d["volume"] == 2.0, "Volume clamped to 2.0 max"
+    assert d["gain_db"] == 24.0, "Gain dB clamped to +24 dB max"
+    assert d["eq_gains_db"][0] == 18.0, "EQ gain clamped to +18 dB max"
+    assert d["eq_gains_db"][1] == -18.0, "EQ gain clamped to -18 dB min"
+
+    # Negative volume and extreme low gain
+    node_low = NodeModel(
+        id=2,
+        node_type=NodeType.VOLUME,
+        volume=-10.0,
+        gain_db=-150.0,
+    )
+    d_low = node_low.to_engine_dict()
+    assert d_low["volume"] == 0.0, "Volume clamped to 0.0 min"
+    assert d_low["gain_db"] == -60.0, "Gain clamped to -60.0 dB min"
+
+    # Engine bridge set_float_param sanitization
+    engine = PhonoryxEngine(sample_rate=48000, block_frames=128)
+    try:
+        ok, _ = engine.apply_graph({
+            "nodes": [
+                {"id": 1, "type": int(NodeType.APP_CAPTURE), "device_id": "test://in"},
+                {"id": 2, "type": int(NodeType.GAIN), "gain_db": 0.0},
+                {"id": 3, "type": int(NodeType.SPEAKER_OUTPUT), "device_id": "test://out"},
+            ],
+            "connections": [
+                {"src_node": 1, "src_port": 0, "dst_node": 2, "dst_port": 0},
+                {"src_node": 2, "src_port": 0, "dst_node": 3, "dst_port": 0},
+            ],
+        })
+        assert ok
+        assert engine.set_float_param(2, "gain_db", 999.0)
+        assert engine.set_float_param(2, "volume", 55.0)
+    finally:
+        engine.close()
+
+
+

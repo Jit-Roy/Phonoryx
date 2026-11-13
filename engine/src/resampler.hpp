@@ -9,32 +9,41 @@
 namespace af {
 
 /**
- * Preallocated linear/drift-adaptive stereo resampler and PCM format converter.
+ * Preallocated windowed-sinc / Hermite-cubic stereo resampler and PCM format converter.
  * Converts arbitrary Windows WASAPI wave formats (int16, int24, int32, float32; 1..8 channels)
- * into stereo float32 and resamples between source and destination sample rates.
+ * into stereo float32 and resamples between source and destination sample rates with:
+ *  - 1:1 direct bypass when sample rates match and drift is zero.
+ *  - 4-point C^1 continuous Hermite-cubic interpolation for sub-ppm drift trim.
+ *  - 8-point Blackman-windowed sinc with anti-aliasing cutoff for arbitrary rate changes (e.g. 44.1k <-> 48k).
  */
 class StereoConverterResampler {
 public:
+    static constexpr size_t kSincRadius = 4; // 8-point windowed sinc filter (-3..+4)
+
     void configure(uint32_t src_rate, uint32_t dst_rate, size_t max_in_frames = 8192) {
         src_rate_ = src_rate > 0 ? src_rate : 48000;
         dst_rate_ = dst_rate > 0 ? dst_rate : 48000;
         base_ratio_ = static_cast<double>(src_rate_) / static_cast<double>(dst_rate_);
         phase_ = 0.0;
-        prev_l_ = 0.0f;
-        prev_r_ = 0.0f;
-        has_prev_ = false;
+        reset_history();
         scratch_stereo_.assign(max_in_frames * 2, 0.0f);
     }
 
     void reset() noexcept {
         phase_ = 0.0;
-        prev_l_ = 0.0f;
-        prev_r_ = 0.0f;
-        has_prev_ = false;
+        reset_history();
     }
 
     bool is_phase_zero() const noexcept {
         return std::abs(phase_) < 1e-4;
+    }
+
+    void reset_history() noexcept {
+        for (size_t i = 0; i < kSincRadius; ++i) {
+            prev_l_[i] = 0.0f;
+            prev_r_[i] = 0.0f;
+        }
+        has_prev_ = false;
     }
 
     /**
@@ -73,49 +82,46 @@ public:
             phase_ = 0.0;
             const size_t n = std::min(in_frames, max_out_frames);
             std::memcpy(out_stereo, in_stereo, n * 2 * sizeof(float));
-            prev_l_ = in_stereo[(n - 1) * 2];
-            prev_r_ = in_stereo[(n - 1) * 2 + 1];
-            has_prev_ = true;
+            update_history(in_stereo, n);
             return n;
         }
 
         const double step = base_ratio_ * drift_adjust;
         if (!has_prev_) {
-            prev_l_ = in_stereo[0];
-            prev_r_ = in_stereo[1];
-            has_prev_ = true;
+            init_history_from_first_frame(in_stereo[0], in_stereo[1]);
         }
 
         size_t out_count = 0;
         double pos = phase_;
-        const double max_pos = static_cast<double>(in_frames) - 1.0;
+        const bool use_sinc = (src_rate_ != dst_rate_);
+        const double lookahead = use_sinc ? 4.0 : 2.0;
+        const double max_pos = (static_cast<double>(in_frames) > lookahead)
+            ? (static_cast<double>(in_frames) - lookahead)
+            : 0.0;
+        const float cutoff = use_sinc
+            ? ((step > 1.0) ? static_cast<float>(0.95 / step) : 0.95f)
+            : 1.0f;
 
         while (out_count < max_out_frames && pos < max_pos) {
             const int64_t idx = static_cast<int64_t>(std::floor(pos));
             const double frac = pos - static_cast<double>(idx);
-            float l0, r0, l1, r1;
-            if (idx < 0) {
-                l0 = prev_l_;
-                r0 = prev_r_;
-                l1 = in_stereo[0];
-                r1 = in_stereo[1];
+            float ol = 0.0f;
+            float or_sample = 0.0f;
+
+            if (use_sinc) {
+                interpolate_sinc(in_stereo, in_frames, idx, static_cast<float>(frac), cutoff, ol, or_sample);
             } else {
-                const size_t i0 = static_cast<size_t>(idx);
-                l0 = in_stereo[i0 * 2];
-                r0 = in_stereo[i0 * 2 + 1];
-                l1 = in_stereo[(i0 + 1) * 2];
-                r1 = in_stereo[(i0 + 1) * 2 + 1];
+                interpolate_cubic(in_stereo, in_frames, idx, static_cast<float>(frac), ol, or_sample);
             }
-            out_stereo[out_count * 2] = static_cast<float>(l0 + (l1 - l0) * frac);
-            out_stereo[out_count * 2 + 1] = static_cast<float>(r0 + (r1 - r0) * frac);
+
+            out_stereo[out_count * 2] = ol;
+            out_stereo[out_count * 2 + 1] = or_sample;
             ++out_count;
             pos += step;
         }
 
+        update_history(in_stereo, in_frames);
         phase_ = pos - static_cast<double>(in_frames);
-        if (phase_ < -1.0) phase_ = -1.0;
-        prev_l_ = in_stereo[(in_frames - 1) * 2];
-        prev_r_ = in_stereo[(in_frames - 1) * 2 + 1];
         return out_count;
     }
 
@@ -127,7 +133,7 @@ public:
         const double step = base_ratio_ * drift_adjust;
         const double last_pos = phase_ + static_cast<double>(out_frames - 1) * step;
         const int64_t last_idx = static_cast<int64_t>(std::floor(last_pos));
-        const size_t min_read = (last_idx >= 0) ? static_cast<size_t>(last_idx + 2) : 1;
+        const size_t min_read = (last_idx >= 0) ? static_cast<size_t>(last_idx + kSincRadius + 1) : kSincRadius;
         const double end_pos = phase_ + static_cast<double>(out_frames) * step;
         const size_t consumed = (end_pos > 0.0) ? static_cast<size_t>(std::floor(end_pos)) : 0;
         return std::max(min_read, consumed);
@@ -145,39 +151,35 @@ public:
             phase_ = 0.0;
             const size_t n = std::min(in_frames, out_frames);
             std::memcpy(out_stereo, in_stereo, n * 2 * sizeof(float));
-            prev_l_ = in_stereo[(n - 1) * 2];
-            prev_r_ = in_stereo[(n - 1) * 2 + 1];
-            has_prev_ = true;
+            update_history(in_stereo, n);
             return n;
         }
 
         const double step = base_ratio_ * drift_adjust;
         if (!has_prev_) {
-            prev_l_ = in_stereo[0];
-            prev_r_ = in_stereo[1];
-            has_prev_ = true;
+            init_history_from_first_frame(in_stereo[0], in_stereo[1]);
         }
+
+        const bool use_sinc = (src_rate_ != dst_rate_);
+        const float cutoff = use_sinc
+            ? ((step > 1.0) ? static_cast<float>(0.95 / step) : 0.95f)
+            : 1.0f;
 
         double pos = phase_;
         for (size_t k = 0; k < out_frames; ++k) {
             const int64_t idx = static_cast<int64_t>(std::floor(pos));
             const double frac = pos - static_cast<double>(idx);
-            float l0, r0, l1, r1;
-            if (idx < 0) {
-                l0 = prev_l_;
-                r0 = prev_r_;
-                l1 = in_stereo[0];
-                r1 = in_stereo[1];
+            float ol = 0.0f;
+            float or_sample = 0.0f;
+
+            if (use_sinc) {
+                interpolate_sinc(in_stereo, in_frames, idx, static_cast<float>(frac), cutoff, ol, or_sample);
             } else {
-                const size_t i0 = std::min(static_cast<size_t>(idx), in_frames - 1);
-                const size_t i1 = std::min(i0 + 1, in_frames - 1);
-                l0 = in_stereo[i0 * 2];
-                r0 = in_stereo[i0 * 2 + 1];
-                l1 = in_stereo[i1 * 2];
-                r1 = in_stereo[i1 * 2 + 1];
+                interpolate_cubic(in_stereo, in_frames, idx, static_cast<float>(frac), ol, or_sample);
             }
-            out_stereo[k * 2] = static_cast<float>(l0 + (l1 - l0) * frac);
-            out_stereo[k * 2 + 1] = static_cast<float>(r0 + (r1 - r0) * frac);
+
+            out_stereo[k * 2] = ol;
+            out_stereo[k * 2 + 1] = or_sample;
             pos += step;
         }
 
@@ -185,8 +187,7 @@ public:
             ? std::min(in_frames, static_cast<size_t>(std::floor(pos)))
             : 0;
         if (consumed > 0) {
-            prev_l_ = in_stereo[(consumed - 1) * 2];
-            prev_r_ = in_stereo[(consumed - 1) * 2 + 1];
+            update_history(in_stereo, consumed);
         }
         phase_ = pos - static_cast<double>(consumed);
         return consumed;
@@ -285,15 +286,145 @@ public:
     }
 
 private:
+    static inline float sinc(float x) noexcept {
+        if (std::abs(x) < 1e-6f) return 1.0f;
+        constexpr float pi = 3.14159265358979323846f;
+        const float px = pi * x;
+        return std::sin(px) / px;
+    }
+
+    static inline float blackman(float x, float radius) noexcept {
+        const float t = x / radius;
+        if (std::abs(t) >= 1.0f) return 0.0f;
+        constexpr float pi = 3.14159265358979323846f;
+        return 0.42f + 0.5f * std::cos(pi * t) + 0.08f * std::cos(2.0f * pi * t);
+    }
+
+    static inline float hermite_cubic(float ym1, float y0, float y1, float y2, float t) noexcept {
+        const float c0 = y0;
+        const float c1 = 0.5f * (y1 - ym1);
+        const float c2 = ym1 - 2.5f * y0 + 2.0f * y1 - 0.5f * y2;
+        const float c3 = 0.5f * (y2 - ym1) + 1.5f * (y0 - y1);
+        return ((c3 * t + c2) * t + c1) * t + c0;
+    }
+
+    void init_history_from_first_frame(float l, float r) noexcept {
+        for (size_t i = 0; i < kSincRadius; ++i) {
+            prev_l_[i] = l;
+            prev_r_[i] = r;
+        }
+        has_prev_ = true;
+    }
+
+    void update_history(const float* in_stereo, size_t count) noexcept {
+        if (count == 0) return;
+        if (count >= kSincRadius) {
+            for (size_t i = 0; i < kSincRadius; ++i) {
+                const size_t src_idx = count - kSincRadius + i;
+                prev_l_[i] = in_stereo[src_idx * 2];
+                prev_r_[i] = in_stereo[src_idx * 2 + 1];
+            }
+        } else {
+            const size_t shift = kSincRadius - count;
+            for (size_t i = 0; i < shift; ++i) {
+                prev_l_[i] = prev_l_[i + count];
+                prev_r_[i] = prev_r_[i + count];
+            }
+            for (size_t i = 0; i < count; ++i) {
+                prev_l_[shift + i] = in_stereo[i * 2];
+                prev_r_[shift + i] = in_stereo[i * 2 + 1];
+            }
+        }
+        has_prev_ = true;
+    }
+
+    inline void get_sample(
+        const float* in_stereo,
+        size_t in_frames,
+        int64_t idx,
+        float& out_l,
+        float& out_r) const noexcept
+    {
+        if (idx < 0) {
+            const int64_t h_idx = static_cast<int64_t>(kSincRadius) + idx;
+            const size_t safe_h = (h_idx >= 0) ? static_cast<size_t>(h_idx) : 0;
+            out_l = prev_l_[std::min(safe_h, kSincRadius - 1)];
+            out_r = prev_r_[std::min(safe_h, kSincRadius - 1)];
+        } else if (idx >= static_cast<int64_t>(in_frames)) {
+            const size_t last = in_frames - 1;
+            out_l = in_stereo[last * 2];
+            out_r = in_stereo[last * 2 + 1];
+        } else {
+            const size_t u_idx = static_cast<size_t>(idx);
+            out_l = in_stereo[u_idx * 2];
+            out_r = in_stereo[u_idx * 2 + 1];
+        }
+    }
+
+    inline void interpolate_cubic(
+        const float* in_stereo,
+        size_t in_frames,
+        int64_t idx,
+        float frac,
+        float& out_l,
+        float& out_r) const noexcept
+    {
+        float lm1, rm1, l0, r0, l1, r1, l2, r2;
+        get_sample(in_stereo, in_frames, idx - 1, lm1, rm1);
+        get_sample(in_stereo, in_frames, idx, l0, r0);
+        get_sample(in_stereo, in_frames, idx + 1, l1, r1);
+        get_sample(in_stereo, in_frames, idx + 2, l2, r2);
+        out_l = hermite_cubic(lm1, l0, l1, l2, frac);
+        out_r = hermite_cubic(rm1, r0, r1, r2, frac);
+    }
+
+    inline void interpolate_sinc(
+        const float* in_stereo,
+        size_t in_frames,
+        int64_t idx,
+        float frac,
+        float cutoff,
+        float& out_l,
+        float& out_r) const noexcept
+    {
+        float sum_l = 0.0f;
+        float sum_r = 0.0f;
+        float weight_sum = 0.0f;
+
+        for (int j = -3; j <= 4; ++j) {
+            const float x = static_cast<float>(j) - frac;
+            const float w = sinc(x * cutoff) * blackman(x, 4.0f) * cutoff;
+            float sl, sr;
+            get_sample(in_stereo, in_frames, idx + j, sl, sr);
+            sum_l += w * sl;
+            sum_r += w * sr;
+            weight_sum += w;
+        }
+
+        if (std::abs(weight_sum) > 1e-6f) {
+            const float inv_w = 1.0f / weight_sum;
+            out_l = sum_l * inv_w;
+            out_r = sum_r * inv_w;
+        } else {
+            get_sample(in_stereo, in_frames, idx, out_l, out_r);
+        }
+    }
+
     uint32_t src_rate_{48000};
     uint32_t dst_rate_{48000};
     double base_ratio_{1.0};
     double phase_{0.0};
-    float prev_l_{0.0f};
-    float prev_r_{0.0f};
+    float prev_l_[kSincRadius]{0.0f};
+    float prev_r_[kSincRadius]{0.0f};
     bool has_prev_{false};
     std::vector<float> scratch_stereo_;
 };
 
 } // namespace af
+
+namespace phonoryx {
+    using af::StereoConverterResampler;
+}
+
+
 

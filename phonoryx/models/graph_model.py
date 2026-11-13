@@ -195,17 +195,24 @@ class NodeModel:
         return self.name.strip() or self.spec().title
 
     def to_engine_dict(self) -> dict:
+        vol = max(0.0, min(2.0, float(self.volume)))
+        gain = max(-60.0, min(24.0, float(self.gain_db)))
+        ch_l = int(self.channel_map[0]) if len(self.channel_map) > 0 and self.channel_map[0] in (-1, 0, 1) else 0
+        ch_r = int(self.channel_map[1]) if len(self.channel_map) > 1 and self.channel_map[1] in (-1, 0, 1) else 1
+        eq = [max(-18.0, min(18.0, float(v))) for v in self.eq_gains_db[:5]]
+        while len(eq) < 5:
+            eq.append(0.0)
         return {
             "id": int(self.id),
             "type": int(self.node_type),
             "device_id": self.device_id,
             "pid": int(self.capture_pid or self.pid),
             "file_path": self.file_path,
-            "volume": float(self.volume),
-            "gain_db": float(self.gain_db),
+            "volume": vol,
+            "gain_db": gain,
             "muted": bool(self.muted),
-            "channel_map": [int(self.channel_map[0]), int(self.channel_map[1])],
-            "eq_gains_db": [float(v) for v in self.eq_gains_db[:5]],
+            "channel_map": [ch_l, ch_r],
+            "eq_gains_db": eq,
         }
 
     def to_project_dict(self) -> dict:
@@ -263,11 +270,11 @@ class NodeModel:
             pid=int(raw.get("pid", 0)),
             process_name=str(raw.get("process_name", "")),
             file_path=str(raw.get("file_path", "")),
-            volume=float(raw.get("volume", 1.0)),
-            gain_db=float(raw.get("gain_db", 0.0)),
+            volume=max(0.0, min(2.0, float(raw.get("volume", 1.0)))),
+            gain_db=max(-60.0, min(24.0, float(raw.get("gain_db", 0.0)))),
             muted=bool(raw.get("muted", False)),
             channel_map=[int(ch_map[0]), int(ch_map[1])],
-            eq_gains_db=[float(x) for x in eq[:5]],
+            eq_gains_db=[max(-18.0, min(18.0, float(x))) for x in eq[:5]],
             sample_rate=int(raw.get("sample_rate", 48000)),
             channels=int(raw.get("channels", 2)),
             group_id=raw.get("group_id"),

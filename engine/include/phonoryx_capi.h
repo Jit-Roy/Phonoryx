@@ -178,6 +178,58 @@ AF_API int32_t af_poll_logs(
     af_log_entry_t* out_logs,
     int32_t max_logs);
 
+/* Modern Phonoryx C ABI types */
+typedef af_engine_t phonoryx_engine_t;
+typedef af_data_flow_t phonoryx_data_flow_t;
+typedef af_device_role_hint_t phonoryx_device_role_hint_t;
+typedef af_node_type_t phonoryx_node_type_t;
+typedef af_device_info_t phonoryx_device_info_t;
+typedef af_process_info_t phonoryx_process_info_t;
+typedef af_node_meter_t phonoryx_node_meter_t;
+typedef af_engine_stats_t phonoryx_engine_stats_t;
+typedef af_log_entry_t phonoryx_log_entry_t;
+
+/* Modern Phonoryx C ABI exports */
+AF_API phonoryx_engine_t* phonoryx_engine_create(uint32_t sample_rate, uint32_t block_frames);
+AF_API void phonoryx_engine_destroy(phonoryx_engine_t* engine);
+AF_API int32_t phonoryx_engine_start(phonoryx_engine_t* engine);
+AF_API void phonoryx_engine_stop(phonoryx_engine_t* engine);
+AF_API int32_t phonoryx_enumerate_devices(
+    phonoryx_engine_t* engine,
+    phonoryx_device_info_t* out_devices,
+    int32_t max_devices);
+AF_API uint64_t phonoryx_get_device_change_seq(phonoryx_engine_t* engine);
+AF_API int32_t phonoryx_enumerate_processes(
+    phonoryx_engine_t* engine,
+    phonoryx_process_info_t* out_processes,
+    int32_t max_processes);
+AF_API int32_t phonoryx_graph_apply_json(
+    phonoryx_engine_t* engine,
+    const char* graph_json,
+    char* err_buf,
+    int32_t err_cap);
+AF_API int32_t phonoryx_node_set_float_param(
+    phonoryx_engine_t* engine,
+    uint64_t node_id,
+    const char* param_name,
+    float value);
+AF_API int32_t phonoryx_node_set_int_param(
+    phonoryx_engine_t* engine,
+    uint64_t node_id,
+    const char* param_name,
+    int32_t value);
+AF_API int32_t phonoryx_get_node_meters(
+    phonoryx_engine_t* engine,
+    phonoryx_node_meter_t* out_meters,
+    int32_t max_meters);
+AF_API int32_t phonoryx_get_engine_stats(
+    phonoryx_engine_t* engine,
+    phonoryx_engine_stats_t* out_stats);
+AF_API int32_t phonoryx_poll_logs(
+    phonoryx_engine_t* engine,
+    phonoryx_log_entry_t* out_logs,
+    int32_t max_logs);
+
 #ifdef __cplusplus
 }
 #endif

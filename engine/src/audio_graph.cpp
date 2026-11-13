@@ -26,6 +26,7 @@ AudioEngine::AudioEngine(uint32_t sample_rate, uint32_t block_frames)
     , device_mgr_(&logs_)
 {
     stop_event_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    master_tick_event_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     device_mgr_.initialize();
     device_mgr_.enumerate_devices();
 }
@@ -48,6 +49,10 @@ AudioEngine::~AudioEngine() {
         CloseHandle(stop_event_);
         stop_event_ = nullptr;
     }
+    if (master_tick_event_) {
+        CloseHandle(master_tick_event_);
+        master_tick_event_ = nullptr;
+    }
 }
 
 bool AudioEngine::start() {
@@ -63,6 +68,16 @@ void AudioEngine::stop() {
     if (stop_event_) SetEvent(stop_event_);
     if (rt_thread_.joinable()) rt_thread_.join();
     logs_.push(0, 0, "Phonoryx real-time engine stopped");
+}
+
+static void sanitize_node_spec(GraphNodeSpec& s) noexcept {
+    s.volume = std::clamp(s.volume, 0.0f, 2.0f);
+    s.gain_db = std::clamp(s.gain_db, -60.0f, 24.0f);
+    for (size_t b = 0; b < 5; ++b) {
+        s.eq_gains_db[b] = std::clamp(s.eq_gains_db[b], -18.0f, 18.0f);
+    }
+    if (s.chan_map_l < -1 || s.chan_map_l > 2) s.chan_map_l = 0;
+    if (s.chan_map_r < -1 || s.chan_map_r > 2) s.chan_map_r = 1;
 }
 
 bool AudioEngine::parse_graph_json(
@@ -116,6 +131,7 @@ bool AudioEngine::parse_graph_json(
                     spec.eq_gains_db[i] = static_cast<float>(arr[i].as_double(0.0));
                 }
             }
+            sanitize_node_spec(spec);
             nodes.push_back(std::move(spec));
         }
     }
@@ -285,11 +301,14 @@ bool AudioEngine::apply_graph_json(const char* json_text, std::string& err_out) 
             res.params->eq_gains_db[b].store(s.eq_gains_db[b], std::memory_order_relaxed);
         }
 
-        if (!res.test_in_ring && is_source_node(s.type)) {
-            res.test_in_ring = std::make_shared<StereoRingBuffer>(32768);
-        }
-        if (!res.test_out_ring && is_output_node(s.type)) {
-            res.test_out_ring = std::make_shared<StereoRingBuffer>(32768);
+        const bool is_test_uri = (s.device_id.rfind("test://", 0) == 0);
+        if (is_test_uri) {
+            if (!res.test_in_ring && is_source_node(s.type)) {
+                res.test_in_ring = std::make_shared<StereoRingBuffer>(32768);
+            }
+            if (!res.test_out_ring && is_output_node(s.type)) {
+                res.test_out_ring = std::make_shared<StereoRingBuffer>(32768);
+            }
         }
 
         // Only recreate WASAPI worker if endpoint identity changed (preserves active streams!)
@@ -298,7 +317,6 @@ bool AudioEngine::apply_graph_json(const char* json_text, std::string& err_out) 
                 res.endpoint->stop();
                 res.endpoint.reset();
             }
-            const bool is_test_uri = (s.device_id.rfind("test://", 0) == 0);
             if (!is_test_uri) {
                 if (s.type == AF_NODE_APP_CAPTURE) {
                     res.endpoint = std::make_shared<WasapiEndpointWorker>(
@@ -357,8 +375,54 @@ bool AudioEngine::apply_graph_json(const char* json_text, std::string& err_out) 
         next_snap->topo_nodes[di].in_edges.push_back(e);
     }
 
+    // Slaved Primary Output Clocking:
+    // Elect the primary physical speaker output (or fallback to virtual output) as the master DAC clock.
+    uint64_t elected_master_id = 0;
+    std::shared_ptr<WasapiEndpointWorker> elected_master_endpoint = nullptr;
+
+    for (const auto& s : specs) {
+        if (s.type == AF_NODE_SPEAKER_OUTPUT && (s.device_id.rfind("test://", 0) != 0)) {
+            auto it = resources_.find(s.id);
+            if (it != resources_.end() && it->second.endpoint) {
+                elected_master_id = s.id;
+                elected_master_endpoint = it->second.endpoint;
+                break;
+            }
+        }
+    }
+    if (!elected_master_endpoint) {
+        for (const auto& s : specs) {
+            if (s.type == AF_NODE_VIRTUAL_OUTPUT && (s.device_id.rfind("test://", 0) != 0)) {
+                auto it = resources_.find(s.id);
+                if (it != resources_.end() && it->second.endpoint) {
+                    elected_master_id = s.id;
+                    elected_master_endpoint = it->second.endpoint;
+                    break;
+                }
+            }
+        }
+    }
+
+    for (auto& [id, res] : resources_) {
+        if (res.endpoint) {
+            if (res.endpoint == elected_master_endpoint) {
+                res.endpoint->set_master_clock(master_tick_event_);
+            } else {
+                res.endpoint->set_master_clock(nullptr);
+            }
+        }
+    }
+
+    if (elected_master_endpoint) {
+        master_render_node_id_ = elected_master_id;
+        master_clock_active_.store(true, std::memory_order_release);
+    } else {
+        master_render_node_id_ = 0;
+        master_clock_active_.store(false, std::memory_order_release);
+    }
+
     // Lock-free atomic snapshot swap
-    auto* prev = active_snapshot_.exchange(next_snap.release(), std::memory_order_acq_rel);
+    auto* prev = active_snapshot_.exchange(next_snap.release(), std::memory_order_seq_cst);
     if (prev) {
         retired_snapshots_.emplace_back(prev);
     }
@@ -367,8 +431,8 @@ bool AudioEngine::apply_graph_json(const char* json_text, std::string& err_out) 
 
 void AudioEngine::retire_old_snapshots() {
     if (retired_snapshots_.empty()) return;
-    // Wait briefly until RT loop is not holding a raw pointer to an older snapshot.
-    while (rt_in_flight_.load(std::memory_order_acquire) != 0) {
+    // Wait briefly until RT loop is not holding a raw pointer to an older snapshot (seq_cst for ARM64 portability).
+    while (rt_in_flight_.load(std::memory_order_seq_cst) != 0) {
         Sleep(1);
     }
     retired_snapshots_.clear();
@@ -554,6 +618,9 @@ void AudioEngine::process_single_block(CompiledGraphSnapshot* snap) {
                 : node.params->volume.load(std::memory_order_relaxed);
             dsp::apply_volume_ramped(work, frames, target, node.current_gain);
 
+            // Final output soft limiter (tanh) prevents harsh digital clipping on DAC/recorder
+            dsp::apply_soft_limiter(work, frames);
+
             if (node.test_out_ring) {
                 node.test_out_ring->write(work, frames);
             }
@@ -597,47 +664,56 @@ void AudioEngine::rt_loop() {
     HANDLE waits[2] = {stop_event_, timer};
 
     while (running_.load(std::memory_order_acquire)) {
-        uint64_t step_ns = base_ns;
-        err_ns += rem_ns;
-        if (err_ns >= sr) {
-            step_ns += 1;
-            err_ns -= sr;
-        }
-        next_tick += std::chrono::nanoseconds(step_ns);
-
-        const auto now_before_wait = std::chrono::steady_clock::now();
-        if (now_before_wait < next_tick) {
-            const int64_t wait_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                next_tick - now_before_wait).count();
-            if (timer) {
-                const int64_t wait_100ns = std::max<int64_t>(1, wait_ns / 100);
-                LARGE_INTEGER due{};
-                due.QuadPart = -wait_100ns;
-                SetWaitableTimer(timer, &due, 0, nullptr, nullptr, FALSE);
-                const DWORD wait_timeout_ms = static_cast<DWORD>(wait_ns / 1000000LL) + 100;
-                DWORD w = WaitForMultipleObjects(2, waits, FALSE, wait_timeout_ms);
-                if (w == WAIT_OBJECT_0) break;
-            } else {
-                const DWORD ms = std::max<DWORD>(1, static_cast<DWORD>(wait_ns / 1000000LL));
-                if (WaitForSingleObject(stop_event_, ms) == WAIT_OBJECT_0) break;
-            }
+        const bool slaved = master_clock_active_.load(std::memory_order_acquire) && (master_tick_event_ != nullptr);
+        if (slaved) {
+            HANDLE slaved_waits[2] = {stop_event_, master_tick_event_};
+            // Slaved to primary DAC render event; 25 ms fallback timeout prevents hang if DAC stalls
+            const DWORD w = WaitForMultipleObjects(2, slaved_waits, FALSE, 25);
+            if (w == WAIT_OBJECT_0) break;
+            next_tick = std::chrono::steady_clock::now();
         } else {
-            if (WaitForSingleObject(stop_event_, 0) == WAIT_OBJECT_0) break;
-            if ((now_before_wait - next_tick) > max_catchup) {
-                next_tick = now_before_wait;
-                err_ns = 0;
+            uint64_t step_ns = base_ns;
+            err_ns += rem_ns;
+            if (err_ns >= sr) {
+                step_ns += 1;
+                err_ns -= sr;
+            }
+            next_tick += std::chrono::nanoseconds(step_ns);
+
+            const auto now_before_wait = std::chrono::steady_clock::now();
+            if (now_before_wait < next_tick) {
+                const int64_t wait_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    next_tick - now_before_wait).count();
+                if (timer) {
+                    const int64_t wait_100ns = std::max<int64_t>(1, wait_ns / 100);
+                    LARGE_INTEGER due{};
+                    due.QuadPart = -wait_100ns;
+                    SetWaitableTimer(timer, &due, 0, nullptr, nullptr, FALSE);
+                    const DWORD wait_timeout_ms = static_cast<DWORD>(wait_ns / 1000000LL) + 100;
+                    DWORD w = WaitForMultipleObjects(2, waits, FALSE, wait_timeout_ms);
+                    if (w == WAIT_OBJECT_0) break;
+                } else {
+                    const DWORD ms = std::max<DWORD>(1, static_cast<DWORD>(wait_ns / 1000000LL));
+                    if (WaitForSingleObject(stop_event_, ms) == WAIT_OBJECT_0) break;
+                }
+            } else {
+                if (WaitForSingleObject(stop_event_, 0) == WAIT_OBJECT_0) break;
+                if ((now_before_wait - next_tick) > max_catchup) {
+                    next_tick = now_before_wait;
+                    err_ns = 0;
+                }
             }
         }
 
         if (!running_.load(std::memory_order_acquire)) break;
 
         const auto t0 = std::chrono::steady_clock::now();
-        rt_in_flight_.fetch_add(1, std::memory_order_acquire);
-        auto* snap = active_snapshot_.load(std::memory_order_acquire);
+        rt_in_flight_.fetch_add(1, std::memory_order_seq_cst);
+        auto* snap = active_snapshot_.load(std::memory_order_seq_cst);
         if (snap) {
             process_single_block(snap);
         }
-        rt_in_flight_.fetch_sub(1, std::memory_order_release);
+        rt_in_flight_.fetch_sub(1, std::memory_order_seq_cst);
         const auto t1 = std::chrono::steady_clock::now();
 
         const double elapsed_us = std::chrono::duration<double, std::micro>(t1 - t0).count();
@@ -669,10 +745,10 @@ size_t AudioEngine::test_pop_sink_audio(uint64_t node_id, float* stereo_out, siz
 }
 
 void AudioEngine::process_one_tick_for_test() {
-    rt_in_flight_.fetch_add(1, std::memory_order_acquire);
-    auto* snap = active_snapshot_.load(std::memory_order_acquire);
+    rt_in_flight_.fetch_add(1, std::memory_order_seq_cst);
+    auto* snap = active_snapshot_.load(std::memory_order_seq_cst);
     if (snap) process_single_block(snap);
-    rt_in_flight_.fetch_sub(1, std::memory_order_release);
+    rt_in_flight_.fetch_sub(1, std::memory_order_seq_cst);
     processed_blocks_.fetch_add(1, std::memory_order_relaxed);
 }
 

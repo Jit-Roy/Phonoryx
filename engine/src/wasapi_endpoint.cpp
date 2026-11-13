@@ -384,8 +384,9 @@ bool WasapiEndpointWorker::run_capture_session() {
 
             if (num_frames > 0) {
                 const size_t fill = ring_.available_read();
-                const size_t target = std::max<size_t>(480, (static_cast<size_t>(engine_sample_rate_) * 30) / 1000);
-                const size_t deadband = std::max<size_t>(480, (static_cast<size_t>(engine_sample_rate_) * 20) / 1000);
+                // Tuned low-latency capture target: 10 ms target, 4 ms deadband (prevents fill wander)
+                const size_t target = std::max<size_t>(240, (static_cast<size_t>(engine_sample_rate_) * 10) / 1000);
+                const size_t deadband = std::max<size_t>(96, (static_cast<size_t>(engine_sample_rate_) * 4) / 1000);
                 double drift = 1.0;
                 if (src_rate != engine_sample_rate_ ||
                     fill < (target > deadband ? target - deadband : 0) ||
@@ -459,8 +460,8 @@ bool WasapiEndpointWorker::run_render_session() {
         return true;
     }
 
-    // 40 ms shared-mode buffer for low latency + glitch resilience
-    constexpr REFERENCE_TIME kRenderBufferDuration = 400000;
+    // 20 ms shared-mode buffer for low latency (tuned down from 40 ms)
+    constexpr REFERENCE_TIME kRenderBufferDuration = 200000;
     hr = client->Initialize(
         AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_EVENTCALLBACK, kRenderBufferDuration, 0, mix_wfx, nullptr);
     if (FAILED(hr)) {
@@ -499,18 +500,19 @@ bool WasapiEndpointWorker::run_render_session() {
     std::vector<float> pull_buf(buf_cap * 2, 0.0f);
     std::vector<float> resampled_buf(buf_cap * 2, 0.0f);
 
+    // Tuned low-latency render targets: 10ms prebuffer, 10ms target, 4ms deadband (down from 30ms/20ms)
     const size_t prebuffer = std::max<size_t>(
         buffer_frames / 2,
-        (static_cast<size_t>(engine_sample_rate_) * 25) / 1000);
+        (static_cast<size_t>(engine_sample_rate_) * 10) / 1000);
     const size_t max_backlog = std::max<size_t>(
         prebuffer * 6,
-        (static_cast<size_t>(engine_sample_rate_) * 160) / 1000);
+        (static_cast<size_t>(engine_sample_rate_) * 60) / 1000);
     const size_t target = std::max<size_t>(
         buffer_frames / 2,
-        (static_cast<size_t>(engine_sample_rate_) * 30) / 1000);
+        (static_cast<size_t>(engine_sample_rate_) * 10) / 1000);
     const size_t deadband = std::max<size_t>(
-        480,
-        (static_cast<size_t>(engine_sample_rate_) * 20) / 1000);
+        144,
+        (static_cast<size_t>(engine_sample_rate_) * 4) / 1000);
 
     // Pre-fill initial buffer with silence
     BYTE* init_data = nullptr;
@@ -536,6 +538,11 @@ bool WasapiEndpointWorker::run_render_session() {
     while (running_.load(std::memory_order_acquire)) {
         DWORD w = WaitForMultipleObjects(2, handles, FALSE, 100);
         if (w == WAIT_OBJECT_0) break;
+
+        // Slaved Primary Output Clocking: signal graph tick when master DAC requests next block
+        if (is_master_clock_.load(std::memory_order_relaxed) && master_tick_event_) {
+            SetEvent(master_tick_event_);
+        }
 
         UINT32 padding = 0;
         hr = client->GetCurrentPadding(&padding);
@@ -580,9 +587,10 @@ bool WasapiEndpointWorker::run_render_session() {
         }
 
         double drift = 1.0;
-        if (dst_rate != engine_sample_rate_ ||
+        const bool is_master = is_master_clock_.load(std::memory_order_relaxed);
+        if (!is_master && (dst_rate != engine_sample_rate_ ||
             avail < (target > deadband ? target - deadband : 0) ||
-            avail > target + deadband) {
+            avail > target + deadband)) {
             const double err = static_cast<double>(avail) - static_cast<double>(target);
             drift = 1.0 + std::clamp(err * 2e-7, -0.0005, 0.0005);
         }

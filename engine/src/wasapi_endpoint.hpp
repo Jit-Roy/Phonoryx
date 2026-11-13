@@ -46,6 +46,14 @@ public:
         return ring_.underruns() + ring_.overruns();
     }
 
+    void set_master_clock(HANDLE tick_event) noexcept {
+        master_tick_event_ = tick_event;
+        is_master_clock_.store(tick_event != nullptr, std::memory_order_release);
+    }
+    bool is_master_clock() const noexcept {
+        return is_master_clock_.load(std::memory_order_acquire);
+    }
+
 private:
     void thread_main();
     bool run_capture_session();
@@ -62,6 +70,8 @@ private:
     StereoConverterResampler resampler_;
 
     HANDLE stop_event_{nullptr};
+    HANDLE master_tick_event_{nullptr};
+    std::atomic<bool> is_master_clock_{false};
     std::atomic<bool> running_{false};
     std::atomic<bool> connected_{false};
     bool rt_capture_primed_{false};

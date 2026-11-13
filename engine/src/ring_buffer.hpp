@@ -145,8 +145,9 @@ public:
     void push(int32_t level, uint64_t node_id, const char* msg) noexcept {
         const uint32_t ticket = write_seq_.fetch_add(1, std::memory_order_acq_rel);
         Slot& slot = slots_[ticket % kCapacity];
-        // Best-effort lock-free overwrite on overflow (never blocks RT thread).
-        slot.ready.store(false, std::memory_order_relaxed);
+        // Version seqlock: odd = write in progress, even = commit completed.
+        slot.version.store(ticket * 2 + 1, std::memory_order_release);
+
         slot.entry.timestamp_ms = static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::system_clock::now().time_since_epoch()).count());
@@ -156,7 +157,8 @@ public:
         if (msg) {
             std::strncpy(slot.entry.message, msg, sizeof(slot.entry.message) - 1);
         }
-        slot.seq.store(ticket + 1, std::memory_order_release);
+
+        slot.version.store(ticket * 2 + 2, std::memory_order_release);
         slot.ready.store(true, std::memory_order_release);
     }
 
@@ -169,11 +171,21 @@ public:
         }
         while (read_seq_ < w && count < max_count) {
             Slot& slot = slots_[read_seq_ % kCapacity];
-            if (!slot.ready.load(std::memory_order_acquire) ||
-                slot.seq.load(std::memory_order_acquire) != read_seq_ + 1) {
+            if (!slot.ready.load(std::memory_order_acquire)) {
                 break;
             }
-            out[count++] = slot.entry;
+            const uint32_t expected_ver = read_seq_ * 2 + 2;
+            const uint32_t v1 = slot.version.load(std::memory_order_acquire);
+            if (v1 != expected_ver) {
+                // Overwritten by newer ticket or write in progress
+                ++read_seq_;
+                continue;
+            }
+            af_log_entry_t candidate = slot.entry;
+            const uint32_t v2 = slot.version.load(std::memory_order_acquire);
+            if (v1 == v2 && (v2 % 2 == 0)) {
+                out[count++] = candidate;
+            }
             ++read_seq_;
         }
         return count;
@@ -182,7 +194,7 @@ public:
 private:
     struct Slot {
         std::atomic<bool> ready{false};
-        std::atomic<uint32_t> seq{0};
+        std::atomic<uint32_t> version{0};
         af_log_entry_t entry{};
     };
     Slot slots_[kCapacity]{};
@@ -191,4 +203,10 @@ private:
 };
 
 } // namespace af
+
+namespace phonoryx {
+    using af::StereoRingBuffer;
+    using af::LogQueue;
+}
+
 

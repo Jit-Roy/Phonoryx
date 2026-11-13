@@ -59,7 +59,7 @@ if sys.platform == "win32":
 
 
 def get_default_cache_dir() -> Path:
-    """Return Windows Local AppData directory (%LOCALAPPDATA%\\Phonoryx), matching PyCam."""
+    """Return Windows Local AppData directory (%LOCALAPPDATA%\\Phonoryx)."""
     base = (
         os.environ.get("LOCALAPPDATA")
         or os.environ.get("APPDATA")
