@@ -14,6 +14,7 @@
     <img src="https://img.shields.io/badge/Engine-C%2B%2B20%20WASAPI-00599C?style=for-the-badge&logo=cplusplus&logoColor=white" alt="C++20 WASAPI" />
     <img src="https://img.shields.io/badge/Build-PyInstaller-1B1F27?style=for-the-badge" alt="PyInstaller" />
     <img src="https://img.shields.io/badge/License-MIT-F59E0B?style=for-the-badge" alt="MIT License" />
+    <a href="https://github.com/Jit-Roy/Phonoryx/releases/tag/v1"><img src="https://img.shields.io/badge/Release-v1-7719AA?style=for-the-badge&logo=github&logoColor=white" alt="Release v1" /></a>
   </p>
 
   <br />
@@ -22,6 +23,15 @@
 </div>
 
 ---
+
+## Download (Standalone Release)
+
+Ready-to-run portable standalone build for Windows (no Python or development environment setup required):
+
+- 📦 **Latest Release:** [**Phonoryx v1**](https://github.com/Jit-Roy/Phonoryx/releases/tag/v1)
+- 💾 **Direct Download:** [**Phonoryx-v1-windows.zip**](https://github.com/Jit-Roy/Phonoryx/releases/download/v1/Phonoryx-v1-windows.zip) (~45 MB)
+
+Simply extract the zip archive and run `Phonoryx.exe`.
 
 ## Requirements
 
