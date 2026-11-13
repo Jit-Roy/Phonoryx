@@ -188,6 +188,22 @@ class NodeModel:
     width: Optional[float] = None
     height: Optional[float] = None
 
+    def __post_init__(self) -> None:
+        self.volume = max(0.0, min(2.0, float(self.volume)))
+        self.gain_db = max(-60.0, min(24.0, float(self.gain_db)))
+        eq = [max(-18.0, min(18.0, float(v))) for v in self.eq_gains_db[:5]]
+        while len(eq) < 5:
+            eq.append(0.0)
+        self.eq_gains_db = eq
+
+    def set_eq_gain(self, band: int, db: float) -> float:
+        val = max(-18.0, min(18.0, float(db)))
+        while len(self.eq_gains_db) < 5:
+            self.eq_gains_db.append(0.0)
+        if 0 <= band < 5:
+            self.eq_gains_db[band] = val
+        return val
+
     def spec(self) -> NodeSpec:
         return NODE_SPECS[self.node_type]
 
@@ -216,6 +232,11 @@ class NodeModel:
         }
 
     def to_project_dict(self) -> dict:
+        vol = max(0.0, min(2.0, float(self.volume)))
+        gain = max(-60.0, min(24.0, float(self.gain_db)))
+        eq = [max(-18.0, min(18.0, float(v))) for v in self.eq_gains_db[:5]]
+        while len(eq) < 5:
+            eq.append(0.0)
         data = {
             "id": int(self.id),
             "type": int(self.node_type),
@@ -228,11 +249,11 @@ class NodeModel:
             "pid": int(self.pid),
             "process_name": self.process_name,
             "file_path": self.file_path,
-            "volume": float(self.volume),
-            "gain_db": float(self.gain_db),
+            "volume": vol,
+            "gain_db": gain,
             "muted": bool(self.muted),
             "channel_map": [int(self.channel_map[0]), int(self.channel_map[1])],
-            "eq_gains_db": [float(v) for v in self.eq_gains_db[:5]],
+            "eq_gains_db": eq,
             "sample_rate": int(self.sample_rate),
             "channels": int(self.channels),
             "group_id": self.group_id,

@@ -340,9 +340,24 @@ bool WasapiEndpointWorker::run_capture_session() {
     inspect_wave_format(mix_wfx, bits, is_float);
     if (free_mix_wfx) CoTaskMemFree(mix_wfx);
 
+    REFERENCE_TIME def_period = 0, min_period = 0;
+    client->GetDevicePeriod(&def_period, &min_period);
+    UINT32 buffer_frames = 0;
+    client->GetBufferSize(&buffer_frames);
+    const uint32_t period_us = (def_period > 0)
+        ? static_cast<uint32_t>(def_period / 10)
+        : static_cast<uint32_t>((static_cast<uint64_t>(buffer_frames) * 1000000ULL) / (src_rate > 0 ? src_rate : 48000));
+    device_period_us_.store(std::max<uint32_t>(5000, period_us), std::memory_order_release);
+    device_sample_rate_.store(src_rate, std::memory_order_release);
+
     resampler_.configure(src_rate, engine_sample_rate_, 16384);
     std::vector<float> converted_stereo(16384 * 2, 0.0f);
     std::vector<float> zero_block(16384 * 2, 0.0f);
+
+    // Tuned low-latency capture target: 10 ms target, 4 ms deadband (prevents fill wander)
+    const size_t target = std::max<size_t>(240, (static_cast<size_t>(engine_sample_rate_) * 10) / 1000);
+    const size_t deadband = std::max<size_t>(96, (static_cast<size_t>(engine_sample_rate_) * 4) / 1000);
+    BufferDriftController drift_ctrl(target, deadband);
 
     hr = client->Start();
     if (FAILED(hr)) {
@@ -384,15 +399,11 @@ bool WasapiEndpointWorker::run_capture_session() {
 
             if (num_frames > 0) {
                 const size_t fill = ring_.available_read();
-                // Tuned low-latency capture target: 10 ms target, 4 ms deadband (prevents fill wander)
-                const size_t target = std::max<size_t>(240, (static_cast<size_t>(engine_sample_rate_) * 10) / 1000);
-                const size_t deadband = std::max<size_t>(96, (static_cast<size_t>(engine_sample_rate_) * 4) / 1000);
                 double drift = 1.0;
                 if (src_rate != engine_sample_rate_ ||
                     fill < (target > deadband ? target - deadband : 0) ||
                     fill > target + deadband) {
-                    const double err = static_cast<double>(fill) - static_cast<double>(target);
-                    drift = 1.0 + std::clamp(err * 2e-7, -0.0005, 0.0005);
+                    drift = drift_ctrl.compute_adjustment(fill);
                 }
 
                 if ((flags & AUDCLNT_BUFFERFLAGS_SILENT) != 0 || !data) {
@@ -514,6 +525,16 @@ bool WasapiEndpointWorker::run_render_session() {
         144,
         (static_cast<size_t>(engine_sample_rate_) * 4) / 1000);
 
+    REFERENCE_TIME def_period = 0, min_period = 0;
+    client->GetDevicePeriod(&def_period, &min_period);
+    const uint32_t period_us = (def_period > 0)
+        ? static_cast<uint32_t>(def_period / 10)
+        : static_cast<uint32_t>((static_cast<uint64_t>(buffer_frames) * 1000000ULL) / (dst_rate > 0 ? dst_rate : 48000));
+    device_period_us_.store(std::max<uint32_t>(5000, period_us), std::memory_order_release);
+    device_sample_rate_.store(dst_rate, std::memory_order_release);
+
+    BufferDriftController drift_ctrl(target, deadband);
+
     // Pre-fill initial buffer with silence
     BYTE* init_data = nullptr;
     if (SUCCEEDED(render->GetBuffer(buffer_frames, &init_data)) && init_data) {
@@ -591,8 +612,7 @@ bool WasapiEndpointWorker::run_render_session() {
         if (!is_master && (dst_rate != engine_sample_rate_ ||
             avail < (target > deadband ? target - deadband : 0) ||
             avail > target + deadband)) {
-            const double err = static_cast<double>(avail) - static_cast<double>(target);
-            drift = 1.0 + std::clamp(err * 2e-7, -0.0005, 0.0005);
+            drift = drift_ctrl.compute_adjustment(avail);
         }
 
         const size_t need_in = resampler_.frames_needed_for_exact_out(frames_to_write, drift);

@@ -99,6 +99,12 @@ public:
     HANDLE master_tick_event() const noexcept {
         return master_tick_event_;
     }
+    uint32_t master_period_us() const noexcept {
+        return master_period_us_.load(std::memory_order_relaxed);
+    }
+    uint32_t master_watchdog_timeout_ms() const noexcept {
+        return master_watchdog_timeout_ms_.load(std::memory_order_relaxed);
+    }
 
     // Deterministic test helpers (also exercises exact RT execution path)
     void process_single_block(CompiledGraphSnapshot* snap);
@@ -146,6 +152,8 @@ private:
     HANDLE master_tick_event_{nullptr};
     std::atomic<bool> master_clock_active_{false};
     uint64_t master_render_node_id_{0};
+    std::atomic<uint32_t> master_period_us_{10000};
+    std::atomic<uint32_t> master_watchdog_timeout_ms_{100};
 };
 
 } // namespace af

@@ -602,8 +602,7 @@ class InspectorPanel(QWidget):
     def _on_eq_changed(self, band: int, tenths_db: int) -> None:
         if self._loading or not self._node:
             return
-        db = tenths_db / 10.0
-        self._node.eq_gains_db[band] = db
+        db = self._node.set_eq_gain(band, tenths_db / 10.0)
         self.float_param_changed.emit(self._node.id, f"eq_band_{band}", db)
 
 

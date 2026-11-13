@@ -2081,6 +2081,27 @@ def test_parameter_validation_and_sanitization():
     assert d_low["volume"] == 0.0, "Volume clamped to 0.0 min"
     assert d_low["gain_db"] == -60.0, "Gain clamped to -60.0 dB min"
 
+    # UI / Model set_eq_gain and to_project_dict validation
+    node_eq = NodeModel(id=3, node_type=NodeType.EQUALIZER)
+    assert node_eq.set_eq_gain(0, 50.0) == 18.0, "set_eq_gain clamped to +18 dB max"
+    assert node_eq.set_eq_gain(1, -50.0) == -18.0, "set_eq_gain clamped to -18 dB min"
+    proj_dict = node_eq.to_project_dict()
+    assert proj_dict["eq_gains_db"][0] == 18.0
+    assert proj_dict["eq_gains_db"][1] == -18.0
+
+    # from_project_dict validation
+    loaded = NodeModel.from_project_dict({
+        "id": 4,
+        "type": int(NodeType.EQUALIZER),
+        "volume": 99.0,
+        "gain_db": 100.0,
+        "eq_gains_db": [90.0, -90.0, 0.0, 0.0, 0.0],
+    })
+    assert loaded.volume == 2.0
+    assert loaded.gain_db == 24.0
+    assert loaded.eq_gains_db[0] == 18.0
+    assert loaded.eq_gains_db[1] == -18.0
+
     # Engine bridge set_float_param sanitization
     engine = PhonoryxEngine(sample_rate=48000, block_frames=128)
     try:

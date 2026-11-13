@@ -8,6 +8,7 @@
 #include <string>
 #include <thread>
 
+#include "drift_controller.hpp"
 #include "resampler.hpp"
 #include "ring_buffer.hpp"
 
@@ -53,6 +54,12 @@ public:
     bool is_master_clock() const noexcept {
         return is_master_clock_.load(std::memory_order_acquire);
     }
+    uint32_t device_period_us() const noexcept {
+        return device_period_us_.load(std::memory_order_relaxed);
+    }
+    uint32_t device_sample_rate() const noexcept {
+        return device_sample_rate_.load(std::memory_order_relaxed);
+    }
 
 private:
     void thread_main();
@@ -72,6 +79,8 @@ private:
     HANDLE stop_event_{nullptr};
     HANDLE master_tick_event_{nullptr};
     std::atomic<bool> is_master_clock_{false};
+    std::atomic<uint32_t> device_period_us_{10000};
+    std::atomic<uint32_t> device_sample_rate_{48000};
     std::atomic<bool> running_{false};
     std::atomic<bool> connected_{false};
     bool rt_capture_primed_{false};

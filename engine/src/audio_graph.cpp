@@ -415,9 +415,16 @@ bool AudioEngine::apply_graph_json(const char* json_text, std::string& err_out) 
 
     if (elected_master_endpoint) {
         master_render_node_id_ = elected_master_id;
+        uint32_t p_us = elected_master_endpoint->device_period_us();
+        if (p_us == 0) p_us = 10000;
+        master_period_us_.store(p_us, std::memory_order_release);
+        const DWORD watchdog_ms = std::max<DWORD>(100, static_cast<DWORD>((static_cast<double>(p_us) * 3.5) / 1000.0));
+        master_watchdog_timeout_ms_.store(watchdog_ms, std::memory_order_release);
         master_clock_active_.store(true, std::memory_order_release);
     } else {
         master_render_node_id_ = 0;
+        master_period_us_.store(10000, std::memory_order_release);
+        master_watchdog_timeout_ms_.store(100, std::memory_order_release);
         master_clock_active_.store(false, std::memory_order_release);
     }
 
@@ -667,10 +674,35 @@ void AudioEngine::rt_loop() {
         const bool slaved = master_clock_active_.load(std::memory_order_acquire) && (master_tick_event_ != nullptr);
         if (slaved) {
             HANDLE slaved_waits[2] = {stop_event_, master_tick_event_};
-            // Slaved to primary DAC render event; 25 ms fallback timeout prevents hang if DAC stalls
-            const DWORD w = WaitForMultipleObjects(2, slaved_waits, FALSE, 25);
+            const DWORD timeout_ms = master_watchdog_timeout_ms_.load(std::memory_order_relaxed);
+            // Slaved to primary DAC render event; adaptive watchdog timeout prevents false trigger on Bluetooth/USB
+            const DWORD w = WaitForMultipleObjects(2, slaved_waits, FALSE, timeout_ms);
             if (w == WAIT_OBJECT_0) break;
+
+            // Cadence matching: determine how many engine blocks correspond to the master device period
+            const uint32_t p_us = master_period_us_.load(std::memory_order_relaxed);
+            const size_t blocks_needed = (w == WAIT_TIMEOUT)
+                ? 1
+                : std::max<size_t>(1, static_cast<size_t>(std::round(static_cast<double>(p_us) / block_us)));
+
+            for (size_t b = 0; b < blocks_needed; ++b) {
+                if (!running_.load(std::memory_order_acquire)) break;
+                const auto t0 = std::chrono::steady_clock::now();
+                rt_in_flight_.fetch_add(1, std::memory_order_seq_cst);
+                auto* snap = active_snapshot_.load(std::memory_order_seq_cst);
+                if (snap) {
+                    process_single_block(snap);
+                }
+                rt_in_flight_.fetch_sub(1, std::memory_order_seq_cst);
+                const auto t1 = std::chrono::steady_clock::now();
+
+                const double elapsed_us = std::chrono::duration<double, std::micro>(t1 - t0).count();
+                const float load = static_cast<float>(std::clamp((elapsed_us / block_us) * 100.0, 0.0, 100.0));
+                cpu_load_percent_.store(load, std::memory_order_relaxed);
+                processed_blocks_.fetch_add(1, std::memory_order_relaxed);
+            }
             next_tick = std::chrono::steady_clock::now();
+            continue;
         } else {
             uint64_t step_ns = base_ns;
             err_ns += rem_ns;
@@ -703,23 +735,23 @@ void AudioEngine::rt_loop() {
                     err_ns = 0;
                 }
             }
+
+            if (!running_.load(std::memory_order_acquire)) break;
+
+            const auto t0 = std::chrono::steady_clock::now();
+            rt_in_flight_.fetch_add(1, std::memory_order_seq_cst);
+            auto* snap = active_snapshot_.load(std::memory_order_seq_cst);
+            if (snap) {
+                process_single_block(snap);
+            }
+            rt_in_flight_.fetch_sub(1, std::memory_order_seq_cst);
+            const auto t1 = std::chrono::steady_clock::now();
+
+            const double elapsed_us = std::chrono::duration<double, std::micro>(t1 - t0).count();
+            const float load = static_cast<float>(std::clamp((elapsed_us / block_us) * 100.0, 0.0, 100.0));
+            cpu_load_percent_.store(load, std::memory_order_relaxed);
+            processed_blocks_.fetch_add(1, std::memory_order_relaxed);
         }
-
-        if (!running_.load(std::memory_order_acquire)) break;
-
-        const auto t0 = std::chrono::steady_clock::now();
-        rt_in_flight_.fetch_add(1, std::memory_order_seq_cst);
-        auto* snap = active_snapshot_.load(std::memory_order_seq_cst);
-        if (snap) {
-            process_single_block(snap);
-        }
-        rt_in_flight_.fetch_sub(1, std::memory_order_seq_cst);
-        const auto t1 = std::chrono::steady_clock::now();
-
-        const double elapsed_us = std::chrono::duration<double, std::micro>(t1 - t0).count();
-        const float load = static_cast<float>(std::clamp((elapsed_us / block_us) * 100.0, 0.0, 100.0));
-        cpu_load_percent_.store(load, std::memory_order_relaxed);
-        processed_blocks_.fetch_add(1, std::memory_order_relaxed);
     }
 
     if (timer) CloseHandle(timer);

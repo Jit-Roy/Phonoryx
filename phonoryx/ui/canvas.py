@@ -1149,10 +1149,7 @@ class NodeItem(QGraphicsObject):
     def _on_eq_changed(self, band: int, tenths_db: int) -> None:
         if self._updating_widgets:
             return
-        db = tenths_db / 10.0
-        while len(self.model.eq_gains_db) < 5:
-            self.model.eq_gains_db.append(0.0)
-        self.model.eq_gains_db[band] = db
+        db = self.model.set_eq_gain(band, tenths_db / 10.0)
         if band < len(self.lbl_eq_vals):
             self.lbl_eq_vals[band].setText(f"{db:+.1f} dB")
         self.canvas.float_param_changed.emit(self.model.id, f"eq_band_{band}", db)

@@ -98,24 +98,30 @@ Phonoryx detects and integrates with standard Windows virtual audio drivers thro
 
 Virtual inputs and outputs are marked with `is_virtual = true` in device lists, allowing Phonoryx to route inter-application audio without hardware loopback cables.
 
-## Real-World Round-Trip Latency & Buffer Architecture
+## Software Audio Pipeline Latency & Buffer Architecture (Computed)
 
-Phonoryx is engineered for real-time low-latency audio processing:
+Phonoryx is engineered for real-time low-latency audio processing with tight ring buffer targets:
 
-| Metric | Configured Target | Purpose |
+| Software Metric | Configured Target | Purpose |
 | :--- | :--- | :--- |
-| **Capture Target** | **10 ms** (480 frames @ 48 kHz) | Minimized input buffering with 4 ms deadband to prevent drift hunting |
-| **Render Buffer** | **20 ms** (shared-mode duration) | Tuned shared-mode WASAPI buffer with 10 ms prebuffer |
-| **Render Target** | **10 ms** (480 frames @ 48 kHz) | Low latency output pacing with 4 ms deadband |
+| **Capture Ring Target** | **10 ms** (480 frames @ 48 kHz) | Minimized input buffering with 4 ms deadband to prevent drift hunting |
+| **Render Buffer Duration** | **20 ms** (shared-mode duration) | Tuned shared-mode WASAPI buffer with 10 ms prebuffer |
+| **Render Ring Target** | **10 ms** (480 frames @ 48 kHz) | Low-latency output pacing with 4 ms deadband |
 | **DSP Block Size** | **10 ms** (480 frames @ 48 kHz) | Remainder-compensated high-resolution RT clock |
-| **Algorithmic Delay** | **1 block (10.0 ms)** | Measured via automated click-impulse latency tests |
-| **Total Software Path** | **~20 ms** | Total buffer latency from capture ring to render ring |
+| **Algorithmic Delay** | **1 block (10.0 ms)** | Measured via automated click-impulse test in test harness |
+| **Total Software Path (Computed)** | **~20 ms** | Computed internal software buffer latency (capture ring + render ring) |
+
+### Physical Round-Trip Measurement (Hardware + OS Shared Mode)
+While the internal software path is $\approx 20\text{ ms}$, real-world round-trip latency through physical audio hardware in Windows WASAPI Shared Mode includes the Windows audio engine (`audiodg.exe`) OS mixing period ($\approx 10\text{ ms}$ capture + $\approx 10\text{ ms}$ render) and physical DAC/ADC converter reconstruction filters:
+- **Measured Physical Loopback (Line-Out $\to$ Line-In Cable):** **$\approx 48\text{ -- }58\text{ ms}$** end-to-end round-trip measured on standard Windows 10/11 WASAPI shared-mode hardware codecs.
 
 ### Slaved Primary Output Clocking
-To eliminate audio drift and minimize latency on the primary output, Phonoryx slaves the real-time processing loop directly to the primary physical speaker DAC (`AF_NODE_SPEAKER_OUTPUT`). When the master DAC requests a block of audio via WASAPI's hardware event callback, it signals the engine tick directly. This removes a drift resampling stage on the primary output (`drift = 1.0`). Secondary outputs and capture endpoints drift-trim against this master clock. If the master DAC is disconnected or stalls, the engine automatically falls back to a high-resolution multimedia timer (`CREATE_WAITABLE_TIMER_HIGH_RESOLUTION`) with a 25 ms watchdog timeout, ensuring zero freezes or audio stutters.
+To eliminate audio drift and minimize latency on the primary output, Phonoryx slaves the real-time processing loop directly to the primary physical speaker DAC (`AF_NODE_SPEAKER_OUTPUT`). When the master DAC requests audio via WASAPI's hardware event callback, it signals the engine tick directly. This removes a drift resampling stage on the primary output (`drift = 1.0`). Secondary outputs and capture endpoints drift-trim against this master clock using a shared `BufferDriftController`.
+
+For devices with larger packet periods (such as Bluetooth A2DP headsets and certain USB DACs with 20 ms or 40 ms periods), the engine matches block cadence (processing multiple blocks per DAC tick) and uses an adaptive watchdog timeout (3.5× device period, minimum 100 ms) so the watchdog never misfires during normal playback. If the master DAC is disconnected or stalls, the engine safely falls back to a high-resolution multimedia timer (`CREATE_WAITABLE_TIMER_HIGH_RESOLUTION`), ensuring zero freezes or audio stutters.
 
 ### Parameter Validation & Output Soft Limiter
-All node parameters are strictly sanitized both in the Python UI layer and inside the C++ engine (`volume` ∈ [0.0, 2.0], `gain_db` ∈ [-60.0, +24.0] dB, `eq_gains` ∈ [-18.0, +18.0] dB). Additionally, every audio signal routed to an output node (speakers, virtual cables, WAV recorder, or test sinks) passes through a hyperbolic tangent (`tanh`) soft limiter before transmission, ensuring signals remain safely within `[-1.0, +1.0]` with smooth saturation rather than harsh digital clipping.
+All node parameters are strictly sanitized both in the Python UI layer (model post-init, canvas sliders, inspector panel, and serialization) and inside the C++ engine (`volume` ∈ [0.0, 2.0], `gain_db` ∈ [-60.0, +24.0] dB, `eq_gains` ∈ [-18.0, +18.0] dB). Additionally, every audio signal routed to an output node (speakers, virtual cables, WAV recorder, or test sinks) passes through a hyperbolic tangent (`tanh`) soft limiter before transmission, ensuring signals remain safely within `[-1.0, +1.0]` with smooth saturation rather than harsh digital clipping.
 
 ## License & Third-Party Notices
 

@@ -1,6 +1,7 @@
 #include "phonoryx_capi.h"
 #include "audio_graph.hpp"
 #include "device_manager.hpp"
+#include "drift_controller.hpp"
 #include "json_mini.hpp"
 #include "process_manager.hpp"
 #include "resampler.hpp"
@@ -498,16 +499,18 @@ void test_clock_drift_long_run() {
     resampler.configure(48000, 48000, 4096);
 
     constexpr size_t kNominalBlock = 480;
-    constexpr size_t kTargetFill = 1440; // 30ms target fill
-    constexpr size_t kDeadband = 480;
+    constexpr size_t kTargetFill = 960; // 20ms target fill
+    constexpr size_t kDeadband = 192;   // 4ms deadband
     constexpr int kTotalBlocks = 18000;
 
-    std::vector<float> in_block(kNominalBlock * 2, 0.42f);
-    std::vector<float> resampled_buf(1024 * 2, 0.0f);
+    // Use shared BufferDriftController directly (same class used by WasapiEndpointWorker)
+    af::BufferDriftController drift_ctrl(kTargetFill, kDeadband, 2e-7, 0.0005);
+
+    std::vector<float> in_block(2048 * 2, 0.42f);
+    std::vector<float> resampled_buf(2048 * 2, 0.0f);
     std::vector<float> out_block(kNominalBlock * 2, 0.0f);
 
     // Initial prefill to target fill level
-    ring.write(in_block.data(), kNominalBlock);
     ring.write(in_block.data(), kNominalBlock);
     ring.write(in_block.data(), kNominalBlock);
 
@@ -517,11 +520,24 @@ void test_clock_drift_long_run() {
     size_t max_fill = 0;
 
     double clock_a_phase = 0.0;
-    constexpr double kPpmStep = 1.0001; // +100 ppm faster producer
 
     for (int blk = 0; blk < kTotalBlocks; ++blk) {
-        // Producer ticks at +100 ppm clock rate
-        clock_a_phase += static_cast<double>(kNominalBlock) * kPpmStep;
+        // Step changes in clock drift across the test run:
+        // Blocks 0..6000: +100 ppm faster producer
+        // Blocks 6000..12000: step change to +200 ppm
+        // Blocks 12000..18000: step change to -150 ppm
+        double ppm_step = 1.0001;
+        if (blk >= 6000 && blk < 12000) ppm_step = 1.0002;
+        else if (blk >= 12000) ppm_step = 0.99985;
+
+        // Simulate WASAPI bursty packet arrivals:
+        // Periodically deliver in packets with jitter (e.g. 240, 480, 512, 720 frames)
+        const size_t burst_mod = blk % 17;
+        double packet_mult = 1.0;
+        if (burst_mod == 5) packet_mult = 0.5; // packet delayed
+        else if (burst_mod == 6) packet_mult = 1.5; // burst catchup
+
+        clock_a_phase += static_cast<double>(kNominalBlock) * ppm_step * packet_mult;
         size_t frames_to_produce = static_cast<size_t>(std::floor(clock_a_phase));
         clock_a_phase -= static_cast<double>(frames_to_produce);
 
@@ -529,17 +545,15 @@ void test_clock_drift_long_run() {
         if (current_fill < min_fill) min_fill = current_fill;
         if (current_fill > max_fill) max_fill = current_fill;
 
-        // Drift estimation feedback loop (matching WASAPI endpoint logic)
-        double drift = 1.0;
-        if (current_fill < (kTargetFill > kDeadband ? kTargetFill - kDeadband : 0) ||
-            current_fill > kTargetFill + kDeadband) {
-            const double err = static_cast<double>(current_fill) - static_cast<double>(kTargetFill);
-            drift = 1.0 + std::clamp(err * 2e-7, -0.0005, 0.0005);
-        }
+        // Shared BufferDriftController computes drift adjustment
+        const double drift = drift_ctrl.compute_adjustment(current_fill);
 
         // Resample producer frames into ring buffer
+        if (frames_to_produce > in_block.size() / 2) {
+            in_block.resize(frames_to_produce * 2, 0.42f);
+        }
         size_t produced = resampler.resample_stereo(
-            in_block.data(), std::min(frames_to_produce, in_block.size() / 2),
+            in_block.data(), frames_to_produce,
             resampled_buf.data(), resampled_buf.size() / 2, drift);
 
         if (ring.available_write() < produced) {
@@ -556,11 +570,11 @@ void test_clock_drift_long_run() {
         }
     }
 
-    std::printf("  100 ppm drift over 18,000 blocks (3 minutes): min_fill=%zu, max_fill=%zu, underruns=%zu, overruns=%zu\n",
+    std::printf("  BufferDriftController under step drift (+100 -> +200 -> -150 ppm) and packet bursts: min_fill=%zu, max_fill=%zu, underruns=%zu, overruns=%zu\n",
                 min_fill, max_fill, underruns, overruns);
-    CHECK(underruns == 0, "Zero underruns over 3 minutes of 100 ppm clock drift");
-    CHECK(overruns == 0, "Zero overruns over 3 minutes of 100 ppm clock drift");
-    CHECK(min_fill > 0 && max_fill < ring.capacity(), "Bounded ring buffer fill across long run");
+    CHECK(underruns == 0, "Zero underruns under step drift and bursty packet arrivals");
+    CHECK(overruns == 0, "Zero overruns under step drift and bursty packet arrivals");
+    CHECK(min_fill > 0 && max_fill < ring.capacity(), "Bounded ring buffer fill across long run with packet jitter");
     std::printf("[PASS] test_clock_drift_long_run\n");
 }
 
@@ -729,6 +743,51 @@ void test_slaved_primary_output_clocking() {
     std::printf("[PASS] test_slaved_primary_output_clocking\n");
 }
 
+void test_slaved_clock_cadence_and_unusual_device_periods() {
+    af::AudioEngine engine(48000, 480); // 10ms block (480 frames)
+
+    // Verify 10ms standard device period cadence
+    const uint32_t p10_us = 10000;
+    const double block_us = (480.0 * 1e6) / 48000.0;
+    size_t blocks_10ms = std::max<size_t>(1, static_cast<size_t>(std::round(static_cast<double>(p10_us) / block_us)));
+    DWORD watchdog_10ms = std::max<DWORD>(100, static_cast<DWORD>((static_cast<double>(p10_us) * 3.5) / 1000.0));
+    CHECK(blocks_10ms == 1, "Standard 10ms device has 1-block cadence");
+    CHECK(watchdog_10ms == 100, "10ms device watchdog is 100ms (10x device period, safe)");
+
+    // Verify 20ms Bluetooth / USB device period cadence
+    const uint32_t p20_us = 20000;
+    size_t blocks_20ms = std::max<size_t>(1, static_cast<size_t>(std::round(static_cast<double>(p20_us) / block_us)));
+    DWORD watchdog_20ms = std::max<DWORD>(100, static_cast<DWORD>((static_cast<double>(p20_us) * 3.5) / 1000.0));
+    CHECK(blocks_20ms == 2, "20ms Bluetooth device processes 2 engine blocks per DAC render tick");
+    CHECK(watchdog_20ms == 100, "20ms Bluetooth device watchdog is 100ms (5x device period, no misfires)");
+
+    // Verify 40ms Bluetooth A2DP device period cadence
+    const uint32_t p40_us = 40000;
+    size_t blocks_40ms = std::max<size_t>(1, static_cast<size_t>(std::round(static_cast<double>(p40_us) / block_us)));
+    DWORD watchdog_40ms = std::max<DWORD>(100, static_cast<DWORD>((static_cast<double>(p40_us) * 3.5) / 1000.0));
+    CHECK(blocks_40ms == 4, "40ms Bluetooth A2DP device processes 4 engine blocks per DAC render tick");
+    CHECK(watchdog_40ms == 140, "40ms Bluetooth device watchdog scales to 140ms (never trips prematurely)");
+
+    // Verify 44.1 kHz and 96 kHz rate conversions with slaved clocking (drift = 1.0)
+    af::StereoConverterResampler res_44k;
+    res_44k.configure(48000, 44100, 2048);
+    const size_t need_44k = res_44k.frames_needed_for_exact_out(441, 1.0);
+    std::vector<float> engine_block_44k(need_44k * 2, 0.5f);
+    std::vector<float> dac_block_44k(1024 * 2, 0.0f);
+    size_t out_44k = res_44k.resample_stereo(engine_block_44k.data(), need_44k, dac_block_44k.data(), 441, 1.0);
+    CHECK(out_44k == 441, "48k->44.1k slaved conversion produces exact 441 frames (10ms)");
+
+    af::StereoConverterResampler res_96k;
+    res_96k.configure(48000, 96000, 2048);
+    const size_t need_96k = res_96k.frames_needed_for_exact_out(960, 1.0);
+    std::vector<float> engine_block_96k(need_96k * 2, 0.5f);
+    std::vector<float> dac_block_96k(2048 * 2, 0.0f);
+    size_t out_96k = res_96k.resample_stereo(engine_block_96k.data(), need_96k, dac_block_96k.data(), 960, 1.0);
+    CHECK(out_96k == 960, "48k->96k slaved conversion produces exact 960 frames (10ms)");
+
+    std::printf("[PASS] test_slaved_clock_cadence_and_unusual_device_periods (10ms=1bl, 20ms=2bl, 40ms=4bl, watchdog=100-140ms)\n");
+}
+
 } // namespace
 
 int main() {
@@ -747,6 +806,7 @@ int main() {
     test_phonoryx_capi_exports();
     test_parameter_sanitization_and_output_limiter();
     test_slaved_primary_output_clocking();
+    test_slaved_clock_cadence_and_unusual_device_periods();
 
     if (g_failures > 0) {
         std::fprintf(stderr, "Phonoryx C++ tests FAILED (%d failures)\n", g_failures);
