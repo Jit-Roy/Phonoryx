@@ -1525,9 +1525,35 @@ class PhonoryxMainWindow(QMainWindow):
         if self._closing:
             return super().eventFilter(obj, event)
         etype = event.type()
-        if etype == QEvent.Type.MouseButtonPress and hasattr(self, "canvas"):
-            if obj is not self.canvas and obj is not self.canvas.viewport():
-                self.canvas.hide_open_popups()
+        if etype == QEvent.Type.MouseButtonPress:
+            if not isinstance(obj, QWidget):
+                return super().eventFilter(obj, event)
+
+            if hasattr(self, "canvas"):
+                open_cmb, open_popup = self.canvas._find_open_combo()
+                if open_cmb is not None:
+                    is_canvas_or_popup = False
+                    cur = obj
+                    while cur is not None:
+                        if (
+                            cur is self.canvas
+                            or cur is self.canvas.viewport()
+                            or cur is open_cmb
+                            or cur is open_popup
+                        ):
+                            is_canvas_or_popup = True
+                            break
+                        cur = cur.parent() if hasattr(cur, "parent") else None
+
+                    gpos = event.globalPosition().toPoint() if hasattr(event, "globalPosition") else None
+                    if not is_canvas_or_popup and gpos is not None:
+                        from phonoryx.ui.canvas import _is_global_pos_on_combo, _is_global_pos_on_popup
+                        if _is_global_pos_on_combo(self.canvas, open_cmb, gpos) or _is_global_pos_on_popup(self.canvas, open_cmb, gpos):
+                            is_canvas_or_popup = True
+
+                    if not is_canvas_or_popup:
+                        self.canvas.hide_open_popups(gpos)
+
             ed = self._tab_rename_editor
             if ed is not None and isValid(ed):
                 gpos = event.globalPosition().toPoint() if hasattr(event, "globalPosition") else None
