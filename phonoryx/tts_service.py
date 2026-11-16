@@ -58,12 +58,55 @@ def list_voice_profiles(voice_dir: Optional[str] = None) -> List[Dict[str, str]]
     return profiles
 
 
+def is_tts_enabled() -> bool:
+    """Return whether the TTS node and inference services are active in the current build/environment."""
+    import sys
+    if getattr(sys, "_PHONORYX_LITE", False):
+        return False
+    if os.environ.get("PHONORYX_LITE", "0") in ("1", "true", "True"):
+        return False
+    return True
+
+
+def ensure_torch_environment() -> bool:
+    """Ensure PyTorch and Transformers can be imported even when running in a standalone PyInstaller bundle."""
+    try:
+        import torch
+        return True
+    except ImportError:
+        pass
+
+    import sys
+    candidates = [
+        r"D:\Anaconda\Lib\site-packages",
+        os.path.join(os.environ.get("CONDA_PREFIX", ""), "Lib", "site-packages") if os.environ.get("CONDA_PREFIX") else "",
+    ]
+    for cp in candidates:
+        if cp and os.path.isdir(cp):
+            t_lib = os.path.join(cp, "torch", "lib")
+            if os.path.isdir(t_lib):
+                try:
+                    os.add_dll_directory(t_lib)
+                except Exception:
+                    pass
+            if cp not in sys.path:
+                sys.path.append(cp)
+            try:
+                import torch
+                logger.info("Successfully hooked host PyTorch from: %s", cp)
+                return True
+            except Exception:
+                pass
+    return False
+
+
 def extract_reference_text_from_profile(profile_path: str) -> str:
     """Read and return cached reference transcription text from a .pt voice profile if present."""
     if not profile_path or not os.path.isfile(profile_path):
         return ""
     if profile_path.lower().endswith(".pt"):
         try:
+            ensure_torch_environment()
             import torch
             data = torch.load(profile_path, weights_only=False)
             if isinstance(data, dict):
@@ -93,6 +136,7 @@ def get_tts_model(model_dir: Optional[str] = None) -> Tuple[Any, Any, str]:
         if _CACHED_MODEL is not None and _CACHED_PROCESSOR is not None:
             return _CACHED_PROCESSOR, _CACHED_MODEL, _CACHED_DEVICE or "cpu"
 
+        ensure_torch_environment()
         import torch
         from transformers import AutoModel, AutoProcessor
 
@@ -165,6 +209,7 @@ def synthesize_speech(
     model_dir: Optional[str] = None,
 ) -> Tuple[np.ndarray, int]:
     """Synthesizes speech from prompt text and returns interleaved stereo float32 array at target_sample_rate."""
+    ensure_torch_environment()
     import torch
     import torchaudio
 

@@ -60,6 +60,12 @@ from phonoryx.ui.widget_helpers import (
     virtual_driver_missing_text,
 )
 
+try:
+    from phonoryx.tts_service import is_tts_enabled
+except ImportError:
+    def is_tts_enabled() -> bool:
+        return False
+
 
 class DraggablePaletteList(QListWidget):
     """QListWidget supporting ComfyUI-style drag-to-canvas node creation."""
@@ -195,6 +201,8 @@ class LeftPalettePanel(QWidget):
             h_item.setFont(font)
             self.palette_list.addItem(h_item)
             for nt, spec in NODE_SPECS.items():
+                if nt == NodeType.TTS and not is_tts_enabled():
+                    continue
                 if spec.category == cat:
                     it = QListWidgetItem(node_type_icon(nt, 16), f"  {spec.title}")
                     it.setData(Qt.ItemDataRole.UserRole, int(nt))

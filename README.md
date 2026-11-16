@@ -66,15 +66,26 @@ Or run the package module directly:
 python -m phonoryx
 ```
 
-## Building the Executable (PyInstaller)
+## Building the Executables
 
-A preconfigured [`Phonoryx.spec`](Phonoryx.spec) is included. It automatically bundles `assets/`, the precompiled `phonoryx_engine.dll`, and the application icon (`assets/icons/app_icon.ico`):
+Phonoryx includes a unified dual-edition build orchestrator (`scripts/build.py`):
 
 ```powershell
-pyinstaller Phonoryx.spec --noconfirm
+# Build your personal Full executable (includes TTS node & local AI GPU bridging):
+python scripts/build.py --full
+
+# Build the ultra-compact public Lite release (~45 MB zip without TTS):
+python scripts/build.py --lite
+
+# Build both editions back-to-back:
+python scripts/build.py --all
+
+# Build Lite edition and upload directly to GitHub Release v2:
+python scripts/build.py --publish-lite
 ```
 
-The standalone bundle is written to `dist\Phonoryx\Phonoryx.exe`. End users can run it directly with zero CMake or Python setup.
+- **Full Edition**: Outputs to `dist\Phonoryx\Phonoryx.exe` with all nodes active (including TTS, Audio Player, ComfyUI copy-paste, and local CUDA bridging).
+- **Lite Edition**: Outputs a self-contained ~45 MB zip bundle (`dist\Phonoryx-v2-windows-x64-lite.zip`) ideal for lightweight distribution and sharing.
 
 ## Cache Location
 
