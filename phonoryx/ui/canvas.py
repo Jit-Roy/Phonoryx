@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+import os
 from typing import Dict, Iterable, List, Optional, Tuple
 
 from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QBrush,
     QColor,
+    QCursor,
     QFont,
     QKeySequence,
     QPainter,
@@ -39,8 +41,10 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMenu,
+    QPlainTextEdit,
     QPushButton,
     QSlider,
+    QTextEdit,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -54,7 +58,7 @@ from phonoryx.models.graph_model import (
     NodeModel,
     ProjectModel,
 )
-from phonoryx.ui.icons import draw_node_type_icon
+from phonoryx.ui.icons import draw_node_type_icon, ui_icon
 from phonoryx.ui.theme import (
     CANVAS_BG,
     CANVAS_GRID_MAJOR,
@@ -670,6 +674,23 @@ class NodeItem(QGraphicsObject):
         self.cmb_map_r: Optional[QComboBox] = None
         self.eq_sliders: List[QSlider] = []
         self.lbl_eq_vals: List[QLabel] = []
+        self.edit_tts_text: Optional[QPlainTextEdit] = None
+        self.edit_tts_ref_text: Optional[QPlainTextEdit] = None
+        self.edit_tts_voice: Optional[QLineEdit] = None
+        self.btn_tts_browse_voice: Optional[QPushButton] = None
+        self.btn_tts_speak: Optional[QPushButton] = None
+        self.btn_tts_replay: Optional[QPushButton] = None
+        self.btn_tts_stop: Optional[QPushButton] = None
+        self.lbl_tts_status: Optional[QLabel] = None
+        self.edit_tts_output_dir: Optional[QLineEdit] = None
+        self.btn_tts_browse_dir: Optional[QPushButton] = None
+        # Audio Player node widgets
+        self.edit_player_file: Optional[QLineEdit] = None
+        self.btn_player_browse: Optional[QPushButton] = None
+        self.btn_player_play: Optional[QPushButton] = None
+        self.btn_player_loop: Optional[QPushButton] = None
+        self.btn_player_stop: Optional[QPushButton] = None
+        self.lbl_player_status: Optional[QLabel] = None
 
         self.setFlags(
             QGraphicsItem.GraphicsItemFlag.ItemIsMovable
@@ -692,10 +713,14 @@ class NodeItem(QGraphicsObject):
     def compute_min_size(self) -> Tuple[float, float]:
         """Compute minimum non-clipping node content size (ComfyUI computeSize pattern)."""
         min_w = (
-            240.0
-            if self.model.node_type
-            in (NodeType.EQUALIZER, NodeType.FILE_RECORDING, NodeType.CHANNEL_MAP)
-            else MIN_NODE_WIDTH
+            264.0
+            if self.model.node_type in (NodeType.TTS, NodeType.AUDIO_PLAYER)
+            else (
+                240.0
+                if self.model.node_type
+                in (NodeType.EQUALIZER, NodeType.FILE_RECORDING, NodeType.CHANNEL_MAP)
+                else MIN_NODE_WIDTH
+            )
         )
         port_h = self._port_area_height()
         widget_h = (self._widget_height + 6.0) if self._widget_height > 0 else 0.0
@@ -820,6 +845,234 @@ class NodeItem(QGraphicsObject):
             row.addWidget(lbl)
             row.addWidget(self.cmb_process, 1)
             lay.addLayout(row)
+
+        if nt == NodeType.TTS:
+            has_widgets = True
+            self.edit_tts_text = QPlainTextEdit(root)
+            self.edit_tts_text.setPlaceholderText("Type text to synthesize...")
+            self.edit_tts_text.setPlainText(self.model.text)
+            self.edit_tts_text.setFixedHeight(54)
+            self.edit_tts_text.setStyleSheet(
+                "QPlainTextEdit { background-color: #161616; color: #EDEDED; border: 1px solid #383838; "
+                "border-radius: 4px; padding: 4px; font-size: 11px; }"
+                "QPlainTextEdit:focus { border: 1px solid #A071EE; }"
+            )
+            self.edit_tts_text.textChanged.connect(self._on_tts_text_changed)
+            lay.addWidget(self.edit_tts_text)
+
+            v_row = QHBoxLayout()
+            v_row.setContentsMargins(0, 0, 0, 0)
+            v_row.setSpacing(6)
+            v_lbl = QLabel("Ref Audio", root)
+            v_lbl.setFixedWidth(52)
+            v_lbl.setStyleSheet("color: #BCBCBC; font-size: 10px;")
+            self.edit_tts_voice = QLineEdit(root)
+            self.edit_tts_voice.setPlaceholderText("Ref audio (.wav, .mp3)...")
+            self.edit_tts_voice.setText(self.model.voice_profile_path)
+            self.edit_tts_voice.setStyleSheet(
+                "QLineEdit { background-color: #161616; color: #EDEDED; border: 1px solid #383838; "
+                "border-radius: 4px; padding: 2px 4px; font-size: 10px; }"
+                "QLineEdit:focus { border: 1px solid #A071EE; }"
+            )
+            self.edit_tts_voice.textChanged.connect(self._on_tts_voice_text_changed)
+            self.btn_tts_browse_voice = QPushButton("📁", root)
+            self.btn_tts_browse_voice.setFixedWidth(26)
+            self.btn_tts_browse_voice.setToolTip("Browse reference audio file (.wav, .mp3, .flac, etc.)")
+            self.btn_tts_browse_voice.setStyleSheet(
+                "QPushButton { background-color: #2D2D2D; color: #EDEDED; border: 1px solid #383838; "
+                "border-radius: 4px; font-size: 11px; padding: 2px 0px; }"
+                "QPushButton:hover { background-color: #383838; border-color: #555555; }"
+            )
+            self.btn_tts_browse_voice.clicked.connect(self._on_tts_browse_voice_clicked)
+            v_row.addWidget(v_lbl)
+            v_row.addWidget(self.edit_tts_voice, 1)
+            v_row.addWidget(self.btn_tts_browse_voice)
+            lay.addLayout(v_row)
+
+            ref_row = QHBoxLayout()
+            ref_row.setContentsMargins(0, 0, 0, 0)
+            ref_row.setSpacing(6)
+            ref_lbl = QLabel("Ref Text", root)
+            ref_lbl.setFixedWidth(52)
+            ref_lbl.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+            ref_lbl.setStyleSheet("color: #BCBCBC; font-size: 10px; padding-top: 2px;")
+            self.edit_tts_ref_text = QPlainTextEdit(root)
+            self.edit_tts_ref_text.setPlaceholderText("Ref voice transcript...")
+            self.edit_tts_ref_text.setPlainText(self.model.reference_text)
+            self.edit_tts_ref_text.setFixedHeight(56)
+            self.edit_tts_ref_text.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+            self.edit_tts_ref_text.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            self.edit_tts_ref_text.setStyleSheet(
+                "QPlainTextEdit { background-color: #161616; color: #EDEDED; border: 1px solid #383838; "
+                "border-radius: 4px; padding: 2px 4px; font-size: 10px; }"
+                "QPlainTextEdit:focus { border: 1px solid #A071EE; }"
+                "QScrollBar:vertical { background: #141414; width: 6px; border-radius: 3px; }"
+                "QScrollBar::handle:vertical { background: #383838; min-height: 16px; border-radius: 3px; }"
+                "QScrollBar::handle:vertical:hover { background: #606060; }"
+                "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }"
+            )
+            self.edit_tts_ref_text.textChanged.connect(self._on_tts_ref_text_changed)
+            ref_row.addWidget(ref_lbl)
+            ref_row.addWidget(self.edit_tts_ref_text, 1)
+            lay.addLayout(ref_row)
+
+            dir_row = QHBoxLayout()
+            dir_row.setContentsMargins(0, 0, 0, 0)
+            dir_row.setSpacing(6)
+            dir_lbl = QLabel("Save Dir", root)
+            dir_lbl.setFixedWidth(52)
+            dir_lbl.setStyleSheet("color: #BCBCBC; font-size: 10px;")
+            self.edit_tts_output_dir = QLineEdit(root)
+            self.edit_tts_output_dir.setPlaceholderText("Save folder (optional)...")
+            self.edit_tts_output_dir.setText(self.model.output_dir)
+            self.edit_tts_output_dir.setStyleSheet(
+                "QLineEdit { background-color: #161616; color: #EDEDED; border: 1px solid #383838; "
+                "border-radius: 4px; padding: 2px 4px; font-size: 10px; }"
+                "QLineEdit:focus { border: 1px solid #A071EE; }"
+            )
+            self.edit_tts_output_dir.textChanged.connect(self._on_tts_output_dir_changed)
+            self.btn_tts_browse_dir = QPushButton("📁", root)
+            self.btn_tts_browse_dir.setFixedWidth(26)
+            self.btn_tts_browse_dir.setToolTip("Select folder to automatically save synthesized audio (.wav)")
+            self.btn_tts_browse_dir.setStyleSheet(
+                "QPushButton { background-color: #2D2D2D; color: #EDEDED; border: 1px solid #383838; "
+                "border-radius: 4px; font-size: 11px; padding: 2px 0px; }"
+                "QPushButton:hover { background-color: #383838; border-color: #555555; }"
+            )
+            self.btn_tts_browse_dir.clicked.connect(self._on_tts_browse_dir_clicked)
+            dir_row.addWidget(dir_lbl)
+            dir_row.addWidget(self.edit_tts_output_dir, 1)
+            dir_row.addWidget(self.btn_tts_browse_dir)
+            lay.addLayout(dir_row)
+
+            act_row = QHBoxLayout()
+            act_row.setContentsMargins(0, 0, 0, 0)
+            act_row.setSpacing(6)
+
+            self.btn_tts_speak = QPushButton("Speak", root)
+            self.btn_tts_speak.setIcon(ui_icon("play_btn", 12))
+            self.btn_tts_speak.setStyleSheet(
+                "QPushButton { background-color: #7719AA; color: #FFFFFF; font-weight: bold; "
+                "border: 1px solid #A071EE; border-radius: 4px; padding: 3px 6px; font-size: 11px; }"
+                "QPushButton:hover { background-color: #8E24AA; }"
+                "QPushButton:disabled { background-color: #2D2D2D; color: #666666; border-color: #383838; }"
+            )
+            self.btn_tts_speak.clicked.connect(self._on_tts_speak_clicked)
+
+            self.btn_tts_replay = QPushButton("Replay", root)
+            self.btn_tts_replay.setToolTip("Replay the synthesized audio buffer again without re-running model")
+            self.btn_tts_replay.setStyleSheet(
+                "QPushButton { background-color: #2D2D2D; color: #EDEDED; font-weight: bold; "
+                "border: 1px solid #383838; border-radius: 4px; padding: 3px 6px; font-size: 11px; }"
+                "QPushButton:hover { background-color: #3D3D3D; border-color: #666666; }"
+            )
+            self.btn_tts_replay.clicked.connect(self._on_tts_replay_clicked)
+
+            self.btn_tts_stop = QPushButton("Stop", root)
+            self.btn_tts_stop.setIcon(ui_icon("stop_btn", 12))
+            self.btn_tts_stop.setStyleSheet(
+                "QPushButton { background-color: #451216; color: #FCA5A5; "
+                "border: 1px solid #7F1D1D; border-radius: 4px; padding: 3px 6px; font-size: 11px; }"
+                "QPushButton:hover { background-color: #5C181E; }"
+                "QPushButton:disabled { background-color: #2D2D2D; color: #666666; border-color: #383838; }"
+            )
+            self.btn_tts_stop.setEnabled(False)
+            self.btn_tts_stop.clicked.connect(self._on_tts_stop_clicked)
+
+            act_row.addWidget(self.btn_tts_speak)
+            act_row.addWidget(self.btn_tts_replay)
+            act_row.addWidget(self.btn_tts_stop)
+
+            self.lbl_tts_status = QLabel("Ready", root)
+            self.lbl_tts_status.setStyleSheet("color: #8A8A8A; font-size: 10px;")
+            self.lbl_tts_status.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            act_row.addWidget(self.lbl_tts_status, 1)
+            lay.addLayout(act_row)
+
+            from phonoryx.tts_service import tts_manager
+            tts_manager.worker_started.connect(self._on_tts_manager_started)
+            tts_manager.worker_progress.connect(self._on_tts_manager_progress)
+            tts_manager.worker_finished.connect(self._on_tts_manager_finished)
+            tts_manager.worker_error.connect(self._on_tts_manager_error)
+            tts_manager.worker_stopped.connect(self._on_tts_manager_stopped)
+
+        if nt == NodeType.AUDIO_PLAYER:
+            has_widgets = True
+            # Row 1: File selection
+            f_row = QHBoxLayout()
+            f_row.setContentsMargins(0, 0, 0, 0)
+            f_row.setSpacing(6)
+            f_lbl = QLabel("File", root)
+            f_lbl.setFixedWidth(28)
+            f_lbl.setStyleSheet("color: #BCBCBC; font-size: 11px;")
+            self.edit_player_file = QLineEdit(root)
+            self.edit_player_file.setPlaceholderText("Select audio file...")
+            fname = os.path.basename(self.model.file_path) if self.model.file_path else ""
+            self.edit_player_file.setText(fname)
+            self.edit_player_file.setReadOnly(True)
+            self.edit_player_file.setStyleSheet(
+                "QLineEdit { background-color: #161616; color: #EDEDED; border: 1px solid #383838; "
+                "border-radius: 4px; padding: 2px 4px; font-size: 10px; }"
+            )
+            self.btn_player_browse = QPushButton("📁", root)
+            self.btn_player_browse.setFixedWidth(26)
+            self.btn_player_browse.setToolTip("Browse audio file (.wav, .mp3, .flac, etc.)")
+            self.btn_player_browse.setStyleSheet(
+                "QPushButton { background-color: #2D2D2D; color: #EDEDED; border: 1px solid #383838; "
+                "border-radius: 4px; font-size: 11px; padding: 2px 0px; }"
+                "QPushButton:hover { background-color: #383838; border-color: #555555; }"
+            )
+            self.btn_player_browse.clicked.connect(self._on_player_browse_clicked)
+            f_row.addWidget(f_lbl)
+            f_row.addWidget(self.edit_player_file, 1)
+            f_row.addWidget(self.btn_player_browse)
+            lay.addLayout(f_row)
+
+            # Row 2: Play Switch, Loop Toggle, Stop
+            act_row = QHBoxLayout()
+            act_row.setContentsMargins(0, 0, 0, 0)
+            act_row.setSpacing(6)
+
+            self.btn_player_play = QPushButton("▶ Play", root)
+            self.btn_player_play.setToolTip("Play switch: triggers audio playback immediately every time it is clicked.")
+            self.btn_player_play.setStyleSheet(
+                "QPushButton { background-color: #925808; color: #FFFFFF; font-weight: bold; "
+                "border: 1px solid #D97706; border-radius: 4px; padding: 3px 8px; font-size: 11px; }"
+                "QPushButton:hover { background-color: #B45309; }"
+            )
+            self.btn_player_play.clicked.connect(self._on_player_play_clicked)
+
+            self.btn_player_loop = QPushButton("🔁 Loop: " + ("On" if self.model.loop else "Off"), root)
+            self.btn_player_loop.setToolTip("Toggle repeating playback loop")
+            self._update_loop_btn_style()
+            self.btn_player_loop.clicked.connect(self._on_player_loop_clicked)
+
+            self.btn_player_stop = QPushButton("⏹", root)
+            self.btn_player_stop.setFixedWidth(26)
+            self.btn_player_stop.setStyleSheet(
+                "QPushButton { background-color: #451216; color: #FCA5A5; "
+                "border: 1px solid #7F1D1D; border-radius: 4px; padding: 3px 0px; font-size: 11px; }"
+                "QPushButton:hover { background-color: #5C181E; }"
+            )
+            self.btn_player_stop.clicked.connect(self._on_player_stop_clicked)
+
+            act_row.addWidget(self.btn_player_play)
+            act_row.addWidget(self.btn_player_loop)
+            act_row.addWidget(self.btn_player_stop)
+
+            self.lbl_player_status = QLabel("Ready", root)
+            self.lbl_player_status.setStyleSheet("color: #8A8A8A; font-size: 10px;")
+            self.lbl_player_status.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            act_row.addWidget(self.lbl_player_status, 1)
+            lay.addLayout(act_row)
+
+            from phonoryx.player_service import get_player_manager
+            pm = get_player_manager()
+            pm.playback_started.connect(self._on_player_manager_started)
+            pm.playback_progress.connect(self._on_player_manager_progress)
+            pm.playback_finished.connect(self._on_player_manager_finished)
+            pm.playback_stopped.connect(self._on_player_manager_stopped)
+            pm.playback_error.connect(self._on_player_manager_error)
 
         if nt == NodeType.FILE_RECORDING:
             has_widgets = True
@@ -1064,6 +1317,20 @@ class NodeItem(QGraphicsObject):
                 val_db = self.model.eq_gains_db[idx] if idx < len(self.model.eq_gains_db) else 0.0
                 sl.setValue(int(round(val_db * 10)))
                 self.lbl_eq_vals[idx].setText(f"{val_db:+.1f} dB")
+            if self.edit_tts_text is not None and self.edit_tts_text.toPlainText() != self.model.text:
+                self.edit_tts_text.setPlainText(self.model.text)
+            if self.edit_tts_ref_text is not None and self.edit_tts_ref_text.toPlainText() != self.model.reference_text:
+                self.edit_tts_ref_text.setPlainText(self.model.reference_text)
+            if self.edit_tts_voice is not None and self.edit_tts_voice.text() != self.model.voice_profile_path:
+                self.edit_tts_voice.setText(self.model.voice_profile_path)
+            if self.edit_tts_output_dir is not None and self.edit_tts_output_dir.text() != self.model.output_dir:
+                self.edit_tts_output_dir.setText(self.model.output_dir)
+            if self.edit_player_file is not None:
+                fname = os.path.basename(self.model.file_path) if self.model.file_path else ""
+                if self.edit_player_file.text() != fname:
+                    self.edit_player_file.setText(fname)
+            if self.btn_player_loop is not None:
+                self._update_loop_btn_style()
         finally:
             self._updating_widgets = False
         self.refresh_catalog(self.canvas.devices, self.canvas.processes)
@@ -1154,6 +1421,290 @@ class NodeItem(QGraphicsObject):
             self.lbl_eq_vals[band].setText(f"{db:+.1f} dB")
         self.canvas.float_param_changed.emit(self.model.id, f"eq_band_{band}", db)
         self.canvas.workspace_modified.emit()
+
+    def _on_tts_voice_text_changed(self) -> None:
+        if self._updating_widgets or self.edit_tts_voice is None:
+            return
+        path = self.edit_tts_voice.text().strip()
+        self.model.voice_profile_path = path
+        if path:
+            from phonoryx.tts_service import extract_reference_text_from_profile
+            cached = extract_reference_text_from_profile(path)
+            if cached and not self.model.reference_text:
+                self.model.reference_text = cached
+                if self.edit_tts_ref_text is not None:
+                    self.edit_tts_ref_text.setPlainText(cached)
+        self.canvas.workspace_modified.emit()
+
+    def _on_tts_text_changed(self) -> None:
+        if self._updating_widgets or self.edit_tts_text is None:
+            return
+        self.model.text = self.edit_tts_text.toPlainText()
+        self.canvas.workspace_modified.emit()
+
+    def _on_tts_ref_text_changed(self) -> None:
+        if self._updating_widgets or self.edit_tts_ref_text is None:
+            return
+        self.model.reference_text = self.edit_tts_ref_text.toPlainText()
+        self.canvas.workspace_modified.emit()
+
+    def _on_tts_browse_voice_clicked(self) -> None:
+        from phonoryx.tts_service import extract_reference_text_from_profile, resolve_voice_dir
+        start_dir = (
+            os.path.dirname(self.model.voice_profile_path)
+            if self.model.voice_profile_path and os.path.exists(self.model.voice_profile_path)
+            else str(resolve_voice_dir())
+        )
+        path, _ = QFileDialog.getOpenFileName(
+            None,
+            "Select Reference Audio",
+            start_dir,
+            "Audio Files (*.wav *.mp3 *.flac *.ogg *.pt);;WAV Audio (*.wav);;MP3 Audio (*.mp3);;All Files (*.*)",
+        )
+        if path:
+            self.model.voice_profile_path = path
+            if self.edit_tts_voice is not None:
+                self.edit_tts_voice.setText(path)
+            cached = extract_reference_text_from_profile(path)
+            if cached and not self.model.reference_text:
+                self.model.reference_text = cached
+                if self.edit_tts_ref_text is not None:
+                    self.edit_tts_ref_text.setPlainText(cached)
+            self.canvas.workspace_modified.emit()
+
+    def _on_tts_output_dir_changed(self) -> None:
+        if self._updating_widgets or self.edit_tts_output_dir is None:
+            return
+        self.model.output_dir = self.edit_tts_output_dir.text().strip()
+        self.canvas.workspace_modified.emit()
+
+    def _on_tts_browse_dir_clicked(self) -> None:
+        start_dir = self.model.output_dir if (self.model.output_dir and os.path.isdir(self.model.output_dir)) else ""
+        chosen = QFileDialog.getExistingDirectory(None, "Select Folder to Save Synthesized WAV Files", start_dir)
+        if chosen:
+            self.model.output_dir = chosen
+            if self.edit_tts_output_dir is not None:
+                self.edit_tts_output_dir.setText(chosen)
+            self.canvas.workspace_modified.emit()
+
+    def _on_tts_replay_clicked(self) -> None:
+        from phonoryx.tts_service import tts_manager
+        engine = self.canvas.engine
+        if not tts_manager.replay(engine, self.model.id):
+            # If no cached audio buffer exists, synthesize it now
+            self._on_tts_speak_clicked()
+
+    def _on_tts_speak_clicked(self) -> None:
+        from phonoryx.tts_service import tts_manager
+        engine = self.canvas.engine
+        text = self.model.text.strip()
+        if not text:
+            if self.lbl_tts_status:
+                self.lbl_tts_status.setText("Prompt is empty")
+                self.lbl_tts_status.setStyleSheet("color: #F87171; font-size: 10px;")
+            return
+        if self.btn_tts_speak:
+            self.btn_tts_speak.setEnabled(False)
+        if self.btn_tts_stop:
+            self.btn_tts_stop.setEnabled(True)
+        if self.lbl_tts_status:
+            self.lbl_tts_status.setText("Starting...")
+            self.lbl_tts_status.setStyleSheet("color: #FFC114; font-size: 10px;")
+        tts_manager.speak(
+            engine=engine,
+            node_id=self.model.id,
+            text=text,
+            voice_profile_path=self.model.voice_profile_path or None,
+            reference_text=self.model.reference_text or None,
+            temperature=self.model.temperature,
+            top_p=self.model.top_p,
+            top_k=self.model.top_k,
+            max_new_tokens=self.model.max_new_tokens,
+            output_dir=self.model.output_dir or None,
+        )
+
+    def _on_tts_stop_clicked(self) -> None:
+        from phonoryx.tts_service import tts_manager
+        tts_manager.stop(self.canvas.engine, self.model.id)
+        if self.btn_tts_speak:
+            self.btn_tts_speak.setEnabled(True)
+        if self.btn_tts_stop:
+            self.btn_tts_stop.setEnabled(False)
+        if self.lbl_tts_status:
+            self.lbl_tts_status.setText("Stopped")
+            self.lbl_tts_status.setStyleSheet("color: #8A8A8A; font-size: 10px;")
+
+    def _on_tts_manager_started(self, node_id: int) -> None:
+        if node_id != self.model.id:
+            return
+        if self.btn_tts_speak:
+            self.btn_tts_speak.setEnabled(False)
+        if self.btn_tts_stop:
+            self.btn_tts_stop.setEnabled(True)
+        if self.lbl_tts_status:
+            self.lbl_tts_status.setText("Synthesizing...")
+            self.lbl_tts_status.setStyleSheet("color: #FFC114; font-size: 10px;")
+
+    def _on_tts_manager_progress(self, node_id: int, msg: str) -> None:
+        if node_id != self.model.id:
+            return
+        if self.lbl_tts_status:
+            self.lbl_tts_status.setText(msg)
+
+    def _on_tts_manager_finished(self, node_id: int, frames: int, duration_s: float) -> None:
+        if node_id != self.model.id:
+            return
+        if self.btn_tts_speak:
+            self.btn_tts_speak.setEnabled(True)
+        if self.btn_tts_stop:
+            self.btn_tts_stop.setEnabled(False)
+        if self.lbl_tts_status:
+            self.lbl_tts_status.setText(f"Playing ({duration_s:.1f}s)")
+            self.lbl_tts_status.setStyleSheet("color: #4ADE80; font-size: 10px;")
+
+    def _on_tts_manager_error(self, node_id: int, err: str) -> None:
+        if node_id != self.model.id:
+            return
+        if self.btn_tts_speak:
+            self.btn_tts_speak.setEnabled(True)
+        if self.btn_tts_stop:
+            self.btn_tts_stop.setEnabled(False)
+        if self.lbl_tts_status:
+            short_err = err if len(err) <= 24 else err[:22] + "..."
+            self.lbl_tts_status.setText(f"Err: {short_err}")
+            self.lbl_tts_status.setStyleSheet("color: #F87171; font-size: 10px;")
+
+    def _on_tts_manager_stopped(self, node_id: int) -> None:
+        if node_id != self.model.id:
+            return
+        if self.btn_tts_speak:
+            self.btn_tts_speak.setEnabled(True)
+        if self.btn_tts_stop:
+            self.btn_tts_stop.setEnabled(False)
+        if self.lbl_tts_status:
+            self.lbl_tts_status.setText("Stopped")
+            self.lbl_tts_status.setStyleSheet("color: #8A8A8A; font-size: 10px;")
+
+    def _on_player_browse_clicked(self) -> None:
+        start_dir = os.path.dirname(self.model.file_path) if self.model.file_path else ""
+        path, _ = QFileDialog.getOpenFileName(
+            None,
+            "Select Audio File",
+            start_dir,
+            "Audio Files (*.wav *.mp3 *.flac *.ogg *.m4a *.aiff);;All Files (*.*)",
+        )
+        if path:
+            self.model.file_path = path
+            if self.edit_player_file is not None:
+                self.edit_player_file.setText(os.path.basename(path))
+            self.canvas.workspace_modified.emit()
+
+    def _on_player_play_clicked(self) -> None:
+        if not self.model.file_path:
+            self._on_player_browse_clicked()
+            if not self.model.file_path:
+                if self.lbl_player_status:
+                    self.lbl_player_status.setText("No file selected")
+                    self.lbl_player_status.setStyleSheet("color: #F87171; font-size: 10px;")
+                return
+        from phonoryx.player_service import get_player_manager
+        pm = get_player_manager()
+        pm.play(
+            engine=self.canvas.engine,
+            node_id=self.model.id,
+            file_path=self.model.file_path,
+            loop=self.model.loop,
+        )
+
+    def _on_player_loop_clicked(self) -> None:
+        self.model.loop = not self.model.loop
+        self._update_loop_btn_style()
+        from phonoryx.player_service import get_player_manager
+        get_player_manager().set_loop(self.model.id, self.model.loop)
+        self.canvas.workspace_modified.emit()
+
+    def _update_loop_btn_style(self) -> None:
+        if self.btn_player_loop is None:
+            return
+        if self.model.loop:
+            self.btn_player_loop.setText("🔁 Loop: On")
+            self.btn_player_loop.setStyleSheet(
+                "QPushButton { background-color: #2E5B36; color: #A7F3D0; font-weight: bold; "
+                "border: 1px solid #059669; border-radius: 4px; padding: 3px 6px; font-size: 11px; }"
+                "QPushButton:hover { background-color: #3B7245; }"
+            )
+        else:
+            self.btn_player_loop.setText("🔁 Loop: Off")
+            self.btn_player_loop.setStyleSheet(
+                "QPushButton { background-color: #2D2D2D; color: #8A8A8A; "
+                "border: 1px solid #383838; border-radius: 4px; padding: 3px 6px; font-size: 11px; }"
+                "QPushButton:hover { background-color: #383838; color: #EDEDED; }"
+            )
+
+    def _on_player_stop_clicked(self) -> None:
+        from phonoryx.player_service import get_player_manager
+        get_player_manager().stop(self.canvas.engine, self.model.id)
+
+    def _on_player_manager_started(self, node_id: int) -> None:
+        if node_id != self.model.id:
+            return
+        if self.btn_player_play:
+            self.btn_player_play.setStyleSheet(
+                "QPushButton { background-color: #D97706; color: #FFFFFF; font-weight: bold; "
+                "border: 1px solid #F59E0B; border-radius: 4px; padding: 3px 8px; font-size: 11px; }"
+                "QPushButton:hover { background-color: #F59E0B; }"
+            )
+        if self.lbl_player_status:
+            self.lbl_player_status.setText("Playing")
+            self.lbl_player_status.setStyleSheet("color: #4ADE80; font-size: 10px;")
+
+    def _on_player_manager_progress(self, node_id: int, p: float) -> None:
+        if node_id != self.model.id:
+            return
+        if self.lbl_player_status:
+            pct = int(round(p * 100))
+            self.lbl_player_status.setText(f"{pct}%")
+            self.lbl_player_status.setStyleSheet("color: #4ADE80; font-size: 10px;")
+
+    def _on_player_manager_finished(self, node_id: int) -> None:
+        if node_id != self.model.id:
+            return
+        if self.btn_player_play:
+            self.btn_player_play.setStyleSheet(
+                "QPushButton { background-color: #925808; color: #FFFFFF; font-weight: bold; "
+                "border: 1px solid #D97706; border-radius: 4px; padding: 3px 8px; font-size: 11px; }"
+                "QPushButton:hover { background-color: #B45309; }"
+            )
+        if self.lbl_player_status:
+            self.lbl_player_status.setText("Finished")
+            self.lbl_player_status.setStyleSheet("color: #8A8A8A; font-size: 10px;")
+
+    def _on_player_manager_stopped(self, node_id: int) -> None:
+        if node_id != self.model.id:
+            return
+        if self.btn_player_play:
+            self.btn_player_play.setStyleSheet(
+                "QPushButton { background-color: #925808; color: #FFFFFF; font-weight: bold; "
+                "border: 1px solid #D97706; border-radius: 4px; padding: 3px 8px; font-size: 11px; }"
+                "QPushButton:hover { background-color: #B45309; }"
+            )
+        if self.lbl_player_status:
+            self.lbl_player_status.setText("Stopped")
+            self.lbl_player_status.setStyleSheet("color: #8A8A8A; font-size: 10px;")
+
+    def _on_player_manager_error(self, node_id: int, err: str) -> None:
+        if node_id != self.model.id:
+            return
+        if self.btn_player_play:
+            self.btn_player_play.setStyleSheet(
+                "QPushButton { background-color: #925808; color: #FFFFFF; font-weight: bold; "
+                "border: 1px solid #D97706; border-radius: 4px; padding: 3px 8px; font-size: 11px; }"
+                "QPushButton:hover { background-color: #B45309; }"
+            )
+        if self.lbl_player_status:
+            short_err = err if len(err) <= 24 else err[:22] + "..."
+            self.lbl_player_status.setText(f"Err: {short_err}")
+            self.lbl_player_status.setStyleSheet("color: #F87171; font-size: 10px;")
 
     def set_meter(self, meter: Optional[NodeMeter]) -> None:
         if meter is None:
@@ -1652,6 +2203,43 @@ class GroupNodesCommand(QUndoCommand):
         self.canvas._remove_group_direct(self.group.id)
 
 
+class PasteSelectionCommand(QUndoCommand):
+    """ComfyUI-style atomic paste command for multiple nodes and their internal wires."""
+
+    def __init__(
+        self,
+        canvas: "NodeCanvas",
+        nodes: List[NodeModel],
+        connections: List[ConnectionModel],
+    ) -> None:
+        super().__init__(f"Paste {len(nodes)} Node{'s' if len(nodes) != 1 else ''}")
+        self.canvas = canvas
+        self.nodes = nodes
+        self.connections = connections
+
+    def redo(self) -> None:
+        for n in self.nodes:
+            self.canvas._insert_node_direct(n)
+        for c in self.connections:
+            self.canvas._insert_connection_direct(c)
+        # Select newly pasted nodes
+        self.canvas.scene_obj.clearSelection()
+        for n in self.nodes:
+            item = self.canvas.node_items.get(n.id)
+            if item is not None:
+                item.setSelected(True)
+        self.canvas.workspace_modified.emit()
+        self.canvas.graph_changed.emit()
+
+    def undo(self) -> None:
+        for c in self.connections:
+            self.canvas._remove_connection_direct(c)
+        for n in self.nodes:
+            self.canvas._remove_node_direct(n.id)
+        self.canvas.workspace_modified.emit()
+        self.canvas.graph_changed.emit()
+
+
 # ---------------------------------------------------------------------------
 # NodeCanvas View & Scene
 # ---------------------------------------------------------------------------
@@ -1666,6 +2254,15 @@ class NodeCanvas(QGraphicsView):
     validation_error = Signal(str)
     float_param_changed = Signal(int, str, float)
     int_param_changed = Signal(int, str, int)
+
+    @property
+    def engine(self) -> Any:
+        p = self.parent()
+        while p is not None:
+            if hasattr(p, "engine"):
+                return p.engine
+            p = p.parent() if hasattr(p, "parent") else None
+        return None
 
     def __init__(self, project: ProjectModel, parent=None) -> None:
         super().__init__(parent)
@@ -1959,6 +2556,125 @@ class NodeCanvas(QGraphicsView):
         if sel_nodes or sel_conns:
             self.undo_stack.push(RemoveSelectionCommand(self, sel_nodes, sel_conns))
 
+    def copy_selected_action(self) -> bool:
+        """ComfyUI-style Ctrl+C: serialize selected nodes and internal wires into system clipboard."""
+        selected_items = [item for item in self.node_items.values() if item.isSelected()]
+        if not selected_items:
+            return False
+
+        selected_ids = {item.model.id for item in selected_items}
+        nodes_data = [item.model.to_project_dict() for item in selected_items]
+
+        # Copy internal connections between selected nodes
+        connections_data = [
+            {
+                "src_node": c.src_node,
+                "src_port": c.src_port,
+                "dst_node": c.dst_node,
+                "dst_port": c.dst_port,
+            }
+            for c in self.project.connections
+            if c.src_node in selected_ids and c.dst_node in selected_ids
+        ]
+
+        # Calculate bounding box origin
+        min_x = min(item.model.x for item in selected_items)
+        min_y = min(item.model.y for item in selected_items)
+
+        payload = {
+            "phonoryx_nodes": True,
+            "origin": [min_x, min_y],
+            "nodes": nodes_data,
+            "connections": connections_data,
+        }
+
+        clipboard = QApplication.clipboard()
+        if clipboard is not None:
+            clipboard.setText(json.dumps(payload))
+            return True
+        return False
+
+    def paste_action(self) -> bool:
+        """ComfyUI-style Ctrl+V: paste nodes from clipboard at mouse cursor or offset."""
+        clipboard = QApplication.clipboard()
+        if clipboard is None:
+            return False
+        text = clipboard.text()
+        if not text:
+            return False
+
+        try:
+            data = json.loads(text)
+        except Exception:
+            return False
+
+        if not isinstance(data, dict) or not data.get("phonoryx_nodes"):
+            return False
+
+        nodes_data = data.get("nodes", [])
+        if not nodes_data:
+            return False
+
+        # Determine paste position
+        origin = data.get("origin", [0.0, 0.0])
+        origin_x = float(origin[0])
+        origin_y = float(origin[1])
+
+        # If mouse cursor is inside the canvas viewport, paste at cursor position (ComfyUI convention)
+        cursor_pos = self.viewport().mapFromGlobal(QCursor.pos())
+        if self.viewport().rect().contains(cursor_pos):
+            target_scene_pos = self.mapToScene(cursor_pos)
+            offset_x = target_scene_pos.x() - origin_x
+            offset_y = target_scene_pos.y() - origin_y
+        else:
+            # Fallback offset from original node positions
+            offset_x = 40.0
+            offset_y = 40.0
+
+        # Collect new nodes and allocate IDs
+        id_map: Dict[int, int] = {}
+        new_nodes: List[NodeModel] = []
+        allocated_ids: List[int] = []
+        try:
+            for raw in nodes_data:
+                old_id = int(raw["id"])
+                new_id = self.project.allocate_node_id()
+                id_map[old_id] = new_id
+                allocated_ids.append(new_id)
+
+                cloned_raw = dict(raw)
+                cloned_raw["id"] = new_id
+                cloned_raw["x"] = float(raw.get("x", 0.0)) + offset_x
+                cloned_raw["y"] = float(raw.get("y", 0.0)) + offset_y
+
+                # Temporarily reserve new_id so subsequent allocate_node_id() picks next ID
+                self.project.nodes[new_id] = NodeModel(id=new_id, node_type=NodeType.APP_CAPTURE)
+
+                new_node = NodeModel.from_project_dict(cloned_raw)
+                new_nodes.append(new_node)
+        finally:
+            for nid in allocated_ids:
+                self.project.nodes.pop(nid, None)
+
+        # Re-map internal connections
+        new_connections: List[ConnectionModel] = []
+        for raw_c in data.get("connections", []):
+            old_src = int(raw_c["src_node"])
+            old_dst = int(raw_c["dst_node"])
+            if old_src in id_map and old_dst in id_map:
+                new_connections.append(
+                    ConnectionModel(
+                        src_node=id_map[old_src],
+                        src_port=int(raw_c["src_port"]),
+                        dst_node=id_map[old_dst],
+                        dst_port=int(raw_c["dst_port"]),
+                    )
+                )
+
+        # Push to undo stack
+        self.undo_stack.push(PasteSelectionCommand(self, new_nodes, new_connections))
+        return True
+
     def group_selected_action(self, title: str = "Signal Group") -> Optional[GroupModel]:
         nids = [it.model.id for it in self.scene_obj.selectedItems() if isinstance(it, NodeItem)]
         if len(nids) < 2:
@@ -2148,7 +2864,16 @@ class NodeCanvas(QGraphicsView):
 
     def _find_open_combo(self) -> Tuple[Optional[QComboBox], Optional[QWidget]]:
         for item in self.node_items.values():
-            for cmb in (item.cmb_device, item.cmb_process, item.cmb_map_l, item.cmb_map_r):
+            root = getattr(item, "_widget_root", None)
+            if root is not None:
+                combos = root.findChildren(QComboBox)
+            else:
+                combos = [
+                    getattr(item, a)
+                    for a in dir(item)
+                    if a.startswith("cmb_") and isinstance(getattr(item, a), QComboBox)
+                ]
+            for cmb in combos:
                 if cmb is not None:
                     p = getattr(cmb, "_floating_popup", None)
                     if p is not None and p.isVisible():
@@ -2559,12 +3284,52 @@ class NodeCanvas(QGraphicsView):
             if moves:
                 self.undo_stack.push(MoveNodesCommand(self, moves))
 
+    def _is_text_editing_active(self) -> bool:
+        """ComfyUI-style active input check: returns True if user is focused inside a text editor.
+
+        Prevents global canvas hotkeys (Ctrl+A, Ctrl+C, Ctrl+V, Delete, Backspace) from
+        hijacking text editing inside inline node widgets (TTS prompt, Ref Text, etc.)
+        or dock panels.
+        """
+        # 1. Check QGraphicsScene focusItem (proxied widgets inside canvas nodes)
+        fi = self.scene_obj.focusItem()
+        if isinstance(fi, QGraphicsProxyWidget):
+            root_widget = fi.widget()
+            if root_widget is not None:
+                focused = root_widget.focusWidget() or root_widget
+                while focused is not None:
+                    if isinstance(focused, (QLineEdit, QPlainTextEdit, QTextEdit)):
+                        return True
+                    focused = focused.parentWidget()
+
+        # 2. Check global Qt application focus widget (dock panels, inspector, search bar)
+        app_fw = QApplication.focusWidget()
+        while app_fw is not None:
+            if isinstance(app_fw, (QLineEdit, QPlainTextEdit, QTextEdit)):
+                return True
+            parent = app_fw.parentWidget()
+            if isinstance(parent, (QLineEdit, QPlainTextEdit, QTextEdit)):
+                return True
+            app_fw = parent
+
+        return False
+
     def keyPressEvent(self, event) -> None:
-        fw = QApplication.focusWidget()
-        in_text_edit = isinstance(self.scene_obj.focusItem(), QGraphicsProxyWidget) and isinstance(
-            fw, QLineEdit
-        )
-        if not in_text_edit:
+        if not self._is_text_editing_active():
+            if event.matches(QKeySequence.StandardKey.Copy) or (
+                event.key() == Qt.Key.Key_C
+                and bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier)
+            ):
+                if self.copy_selected_action():
+                    event.accept()
+                    return
+            if event.matches(QKeySequence.StandardKey.Paste) or (
+                event.key() == Qt.Key.Key_V
+                and bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier)
+            ):
+                if self.paste_action():
+                    event.accept()
+                    return
             if event.matches(QKeySequence.StandardKey.SelectAll) or (
                 event.key() == Qt.Key.Key_A
                 and bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier)
@@ -2595,15 +3360,22 @@ class NodeCanvas(QGraphicsView):
 
         sel_nodes = [it for it in self.scene_obj.selectedItems() if isinstance(it, NodeItem)]
         if sel_nodes:
+            act_copy = menu.addAction("Copy Node(s)\tCtrl+C")
+            act_paste = menu.addAction("Paste Node(s)\tCtrl+V")
+            menu.addSeparator()
             act_group = menu.addAction("Group Selected Nodes")
             act_fit_size = (
                 menu.addAction("Resize to Fit")
                 if any(it.model.width is not None or it.model.height is not None for it in sel_nodes)
                 else None
             )
-            act_del = menu.addAction("Delete Selected")
+            act_del = menu.addAction("Delete Selected\tDel")
             chosen = menu.exec(event.globalPos())
-            if chosen == act_group:
+            if chosen == act_copy:
+                self.copy_selected_action()
+            elif chosen == act_paste:
+                self.paste_action()
+            elif chosen == act_group:
                 self.group_selected_action()
             elif act_fit_size is not None and chosen == act_fit_size:
                 self.resize_selected_to_fit_action()
@@ -2611,7 +3383,20 @@ class NodeCanvas(QGraphicsView):
                 self.delete_selected_action()
             return
 
-        # Empty canvas right-click quick add
+        # Empty canvas right-click quick add & paste
+        clipboard = QApplication.clipboard()
+        can_paste = False
+        if clipboard is not None and clipboard.text():
+            try:
+                cd = json.loads(clipboard.text())
+                can_paste = isinstance(cd, dict) and bool(cd.get("phonoryx_nodes"))
+            except Exception:
+                pass
+
+        act_paste = menu.addAction("Paste Node(s)\tCtrl+V") if can_paste else None
+        if act_paste is not None:
+            menu.addSeparator()
+
         src_menu = menu.addMenu("Add Source Node")
         proc_menu = menu.addMenu("Add Processing Node")
         out_menu = menu.addMenu("Add Output Node")
@@ -2627,6 +3412,8 @@ class NodeCanvas(QGraphicsView):
             actions[target_menu.addAction(spec.title)] = nt
 
         chosen = menu.exec(event.globalPos())
-        if chosen in actions:
+        if act_paste is not None and chosen == act_paste:
+            self.paste_action()
+        elif chosen in actions:
             self.add_node_action(actions[chosen], scene_pos=scene_pos)
 

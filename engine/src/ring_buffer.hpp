@@ -147,6 +147,7 @@ public:
         Slot& slot = slots_[ticket % kCapacity];
         // Version seqlock: odd = write in progress, even = commit completed.
         slot.version.store(ticket * 2 + 1, std::memory_order_release);
+        std::atomic_thread_fence(std::memory_order_release);
 
         slot.entry.timestamp_ms = static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -158,6 +159,7 @@ public:
             std::strncpy(slot.entry.message, msg, sizeof(slot.entry.message) - 1);
         }
 
+        std::atomic_thread_fence(std::memory_order_release);
         slot.version.store(ticket * 2 + 2, std::memory_order_release);
         slot.ready.store(true, std::memory_order_release);
     }
@@ -176,14 +178,16 @@ public:
             }
             const uint32_t expected_ver = read_seq_ * 2 + 2;
             const uint32_t v1 = slot.version.load(std::memory_order_acquire);
-            if (v1 != expected_ver) {
+            if (v1 != expected_ver || (v1 & 1)) {
                 // Overwritten by newer ticket or write in progress
                 ++read_seq_;
                 continue;
             }
+            std::atomic_thread_fence(std::memory_order_acquire);
             af_log_entry_t candidate = slot.entry;
+            std::atomic_thread_fence(std::memory_order_acquire);
             const uint32_t v2 = slot.version.load(std::memory_order_acquire);
-            if (v1 == v2 && (v2 % 2 == 0)) {
+            if (v1 == v2) {
                 out[count++] = candidate;
             }
             ++read_seq_;

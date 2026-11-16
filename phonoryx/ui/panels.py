@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from typing import Dict, List, Optional
 
 from PySide6.QtCore import QMimeData, QPoint, QSize, Qt, Signal
@@ -408,6 +409,161 @@ class InspectorPanel(QWidget):
         form.addRow(*self._row_map_l)
         form.addRow(*self._row_map_r)
         form_root.addWidget(self.eq_container)
+
+        # TTS property controls
+        self.tts_container = QFrame()
+        tts_lay = QVBoxLayout(self.tts_container)
+        tts_lay.setContentsMargins(0, 4, 0, 4)
+        tts_lay.setSpacing(6)
+
+        tts_hdr = QLabel("TTS Model: Audio8-TTS-Realistic-Air (601M)")
+        tts_hdr.setStyleSheet("color: #A071EE; font-weight: bold; font-size: 11px;")
+        tts_lay.addWidget(tts_hdr)
+
+        tts_form = QFormLayout()
+        tts_form.setContentsMargins(0, 0, 0, 0)
+        tts_form.setSpacing(6)
+
+        self.edit_tts_text = QPlainTextEdit()
+        self.edit_tts_text.setPlaceholderText("Enter text to synthesize...")
+        self.edit_tts_text.setFixedHeight(68)
+        self.edit_tts_text.textChanged.connect(self._on_tts_text_changed)
+        tts_form.addRow("Prompt:", self.edit_tts_text)
+
+        v_box = QHBoxLayout()
+        v_box.setContentsMargins(0, 0, 0, 0)
+        v_box.setSpacing(4)
+        self.edit_tts_voice = QLineEdit()
+        self.edit_tts_voice.setPlaceholderText("Ref audio (.wav, .mp3, etc.)...")
+        self.edit_tts_voice.textChanged.connect(self._on_tts_voice_text_changed)
+        btn_browse_voice = QPushButton("Browse")
+        btn_browse_voice.clicked.connect(self._browse_voice_profile)
+        v_box.addWidget(self.edit_tts_voice, 1)
+        v_box.addWidget(btn_browse_voice)
+        self._row_tts_voice_widget = QWidget()
+        self._row_tts_voice_widget.setLayout(v_box)
+        tts_form.addRow("Ref Audio:", self._row_tts_voice_widget)
+
+        self.edit_tts_ref_text = QPlainTextEdit()
+        self.edit_tts_ref_text.setPlaceholderText("Transcription of reference voice (auto-loaded from .pt profile or custom text)...")
+        self.edit_tts_ref_text.setFixedHeight(68)
+        self.edit_tts_ref_text.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.edit_tts_ref_text.textChanged.connect(self._on_tts_ref_text_changed)
+        tts_form.addRow("Ref Transcript:", self.edit_tts_ref_text)
+
+        dir_box = QHBoxLayout()
+        self.edit_tts_output_dir = QLineEdit()
+        self.edit_tts_output_dir.setPlaceholderText("Save folder (optional)...")
+        self.edit_tts_output_dir.textChanged.connect(self._on_tts_output_dir_changed)
+        btn_browse_dir = QPushButton("Browse")
+        btn_browse_dir.clicked.connect(self._browse_tts_output_dir)
+        dir_box.addWidget(self.edit_tts_output_dir, 1)
+        dir_box.addWidget(btn_browse_dir)
+        self._row_tts_dir_widget = QWidget()
+        self._row_tts_dir_widget.setLayout(dir_box)
+        tts_form.addRow("Save Folder:", self._row_tts_dir_widget)
+
+        temp_box = QHBoxLayout()
+        self.slider_tts_temp = QSlider(Qt.Orientation.Horizontal)
+        self.slider_tts_temp.setRange(1, 15)
+        self.lbl_tts_temp = QLabel("0.8")
+        self.slider_tts_temp.valueChanged.connect(self._on_tts_temp_changed)
+        temp_box.addWidget(self.slider_tts_temp)
+        temp_box.addWidget(self.lbl_tts_temp)
+        temp_w = QWidget()
+        temp_w.setLayout(temp_box)
+        tts_form.addRow("Temperature:", temp_w)
+
+        topp_box = QHBoxLayout()
+        self.slider_tts_topp = QSlider(Qt.Orientation.Horizontal)
+        self.slider_tts_topp.setRange(10, 100)
+        self.lbl_tts_topp = QLabel("0.95")
+        self.slider_tts_topp.valueChanged.connect(self._on_tts_topp_changed)
+        topp_box.addWidget(self.slider_tts_topp)
+        topp_box.addWidget(self.lbl_tts_topp)
+        topp_w = QWidget()
+        topp_w.setLayout(topp_box)
+        tts_form.addRow("Top P:", topp_w)
+
+        topk_box = QHBoxLayout()
+        self.slider_tts_topk = QSlider(Qt.Orientation.Horizontal)
+        self.slider_tts_topk.setRange(1, 100)
+        self.lbl_tts_topk = QLabel("50")
+        self.slider_tts_topk.valueChanged.connect(self._on_tts_topk_changed)
+        topk_box.addWidget(self.slider_tts_topk)
+        topk_box.addWidget(self.lbl_tts_topk)
+        topk_w = QWidget()
+        topk_w.setLayout(topk_box)
+        tts_form.addRow("Top K:", topk_w)
+
+        tokens_box = QHBoxLayout()
+        self.slider_tts_tokens = QSlider(Qt.Orientation.Horizontal)
+        self.slider_tts_tokens.setRange(64, 2048)
+        self.lbl_tts_tokens = QLabel("1024")
+        self.slider_tts_tokens.valueChanged.connect(self._on_tts_tokens_changed)
+        tokens_box.addWidget(self.slider_tts_tokens)
+        tokens_box.addWidget(self.lbl_tts_tokens)
+        tokens_w = QWidget()
+        tokens_w.setLayout(tokens_box)
+        tts_form.addRow("Max Tokens:", tokens_w)
+
+        tts_lay.addLayout(tts_form)
+
+        act_box = QHBoxLayout()
+        self.btn_tts_speak = QPushButton("Generate / Speak")
+        self.btn_tts_speak.clicked.connect(self._on_tts_speak_clicked)
+        self.btn_tts_replay = QPushButton("Replay")
+        self.btn_tts_replay.clicked.connect(self._on_tts_replay_clicked)
+        self.btn_tts_stop = QPushButton("Stop")
+        self.btn_tts_stop.setEnabled(False)
+        self.btn_tts_stop.clicked.connect(self._on_tts_stop_clicked)
+        act_box.addWidget(self.btn_tts_speak)
+        act_box.addWidget(self.btn_tts_replay)
+        act_box.addWidget(self.btn_tts_stop)
+        tts_lay.addLayout(act_box)
+
+        self.lbl_tts_status = QLabel("Ready")
+        self.lbl_tts_status.setStyleSheet("color: #8A8A8A; font-size: 11px;")
+        tts_lay.addWidget(self.lbl_tts_status)
+        form_root.addWidget(self.tts_container)
+
+        # Audio Player inspector section
+        self.player_container = QWidget()
+        player_lay = QVBoxLayout(self.player_container)
+        player_lay.setContentsMargins(0, 0, 0, 0)
+        player_form = QFormLayout()
+
+        p_file_box = QHBoxLayout()
+        self.edit_player_file = QLineEdit()
+        self.edit_player_file.setPlaceholderText("Select audio file...")
+        self.edit_player_file.setReadOnly(True)
+        btn_browse_player = QPushButton("Browse")
+        btn_browse_player.clicked.connect(self._browse_player_file)
+        p_file_box.addWidget(self.edit_player_file, 1)
+        p_file_box.addWidget(btn_browse_player)
+        p_file_w = QWidget()
+        p_file_w.setLayout(p_file_box)
+        player_form.addRow("Audio File:", p_file_w)
+
+        self.chk_player_loop = QCheckBox("Loop Audio (Repeat continuously)")
+        self.chk_player_loop.toggled.connect(self._on_player_loop_toggled)
+        player_form.addRow("Loop:", self.chk_player_loop)
+        player_lay.addLayout(player_form)
+
+        p_act_box = QHBoxLayout()
+        self.btn_player_play = QPushButton("▶ Play")
+        self.btn_player_play.clicked.connect(self._on_player_play_clicked)
+        self.btn_player_stop = QPushButton("⏹ Stop")
+        self.btn_player_stop.clicked.connect(self._on_player_stop_clicked)
+        p_act_box.addWidget(self.btn_player_play)
+        p_act_box.addWidget(self.btn_player_stop)
+        player_lay.addLayout(p_act_box)
+
+        self.lbl_player_status = QLabel("Ready")
+        self.lbl_player_status.setStyleSheet("color: #8A8A8A; font-size: 11px;")
+        player_lay.addWidget(self.lbl_player_status)
+        form_root.addWidget(self.player_container)
+
         form_root.addStretch(1)
 
         scroll = QScrollArea()
@@ -488,7 +644,9 @@ class InspectorPanel(QWidget):
             NodeType.APP_CAPTURE,
             NodeType.SYSTEM_CAPTURE,
             NodeType.MIC_INPUT,
+            NodeType.TTS,
             NodeType.VIRTUAL_INPUT,
+            NodeType.AUDIO_PLAYER,
             NodeType.VOLUME,
             NodeType.GAIN,
             NodeType.MUTE,
@@ -507,6 +665,36 @@ class InspectorPanel(QWidget):
         self.eq_container.setVisible(node.node_type == NodeType.EQUALIZER)
         for i, s in enumerate(self.eq_sliders):
             s.setValue(int(round(node.eq_gains_db[i] * 10)))
+
+        is_tts = node.node_type == NodeType.TTS
+        self.tts_container.setVisible(is_tts)
+        if is_tts:
+            self.edit_tts_text.setPlainText(node.text)
+            self.edit_tts_ref_text.setPlainText(node.reference_text)
+            self.edit_tts_output_dir.setText(node.output_dir)
+            self.edit_tts_voice.setText(node.voice_profile_path)
+            self.slider_tts_temp.setValue(int(round(node.temperature * 10)))
+            self.lbl_tts_temp.setText(f"{node.temperature:.1f}")
+            self.slider_tts_topp.setValue(int(round(node.top_p * 100)))
+            self.lbl_tts_topp.setText(f"{node.top_p:.2f}")
+            self.slider_tts_topk.setValue(int(node.top_k))
+            self.lbl_tts_topk.setText(str(node.top_k))
+            self.slider_tts_tokens.setValue(int(node.max_new_tokens))
+            self.lbl_tts_tokens.setText(str(node.max_new_tokens))
+            from phonoryx.tts_service import tts_manager
+            is_gen = tts_manager.is_generating(node.id)
+            self.btn_tts_speak.setEnabled(not is_gen)
+            self.btn_tts_stop.setEnabled(is_gen)
+            self.lbl_tts_status.setText("Synthesizing..." if is_gen else "Ready")
+
+        is_player = node.node_type == NodeType.AUDIO_PLAYER
+        self.player_container.setVisible(is_player)
+        if is_player:
+            self.edit_player_file.setText(node.file_path)
+            self.chk_player_loop.setChecked(node.loop)
+            from phonoryx.player_service import get_player_manager
+            is_playing = get_player_manager().is_playing(node.id)
+            self.lbl_player_status.setText("Playing" if is_playing else "Ready")
 
         self._loading = False
 
@@ -604,6 +792,196 @@ class InspectorPanel(QWidget):
             return
         db = self._node.set_eq_gain(band, tenths_db / 10.0)
         self.float_param_changed.emit(self._node.id, f"eq_band_{band}", db)
+
+    def _on_tts_voice_text_changed(self) -> None:
+        if self._loading or not self._node:
+            return
+        path = self.edit_tts_voice.text().strip()
+        self._node.voice_profile_path = path
+        if path:
+            from phonoryx.tts_service import extract_reference_text_from_profile
+            cached = extract_reference_text_from_profile(path)
+            if cached and not self._node.reference_text:
+                self._node.reference_text = cached
+                self.edit_tts_ref_text.setPlainText(cached)
+
+    def _browse_voice_profile(self) -> None:
+        if not self._node:
+            return
+        from phonoryx.tts_service import extract_reference_text_from_profile, resolve_voice_dir
+        start_dir = (
+            os.path.dirname(self._node.voice_profile_path)
+            if self._node.voice_profile_path and os.path.exists(self._node.voice_profile_path)
+            else str(resolve_voice_dir())
+        )
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Reference Audio",
+            start_dir,
+            "Audio Files (*.wav *.mp3 *.flac *.ogg *.pt);;WAV Audio (*.wav);;MP3 Audio (*.mp3);;All Files (*.*)",
+        )
+        if path:
+            self._node.voice_profile_path = path
+            self.edit_tts_voice.setText(path)
+            cached = extract_reference_text_from_profile(path)
+            if cached and not self._node.reference_text:
+                self._node.reference_text = cached
+                self.edit_tts_ref_text.setPlainText(cached)
+
+    def _on_tts_text_changed(self) -> None:
+        if self._loading or not self._node:
+            return
+        self._node.text = self.edit_tts_text.toPlainText()
+
+    def _on_tts_ref_text_changed(self) -> None:
+        if self._loading or not self._node:
+            return
+        self._node.reference_text = self.edit_tts_ref_text.toPlainText()
+
+    def _on_tts_temp_changed(self, val: int) -> None:
+        if self._loading or not self._node:
+            return
+        t = val / 10.0
+        self.lbl_tts_temp.setText(f"{t:.1f}")
+        self._node.temperature = t
+
+    def _on_tts_topp_changed(self, val: int) -> None:
+        if self._loading or not self._node:
+            return
+        p = val / 100.0
+        self.lbl_tts_topp.setText(f"{p:.2f}")
+        self._node.top_p = p
+
+    def _on_tts_topk_changed(self, val: int) -> None:
+        if self._loading or not self._node:
+            return
+        self.lbl_tts_topk.setText(str(val))
+        self._node.top_k = val
+
+    def _on_tts_tokens_changed(self, val: int) -> None:
+        if self._loading or not self._node:
+            return
+        self.lbl_tts_tokens.setText(str(val))
+        self._node.max_new_tokens = val
+
+    def _get_engine(self) -> Any:
+        p = self.parent()
+        while p is not None:
+            if hasattr(p, "engine"):
+                return p.engine
+            p = p.parent()
+        return None
+
+    def _on_tts_output_dir_changed(self) -> None:
+        if self._loading or not self._node:
+            return
+        self._node.output_dir = self.edit_tts_output_dir.text().strip()
+
+    def _browse_tts_output_dir(self) -> None:
+        if not self._node:
+            return
+        start_dir = self._node.output_dir if (self._node.output_dir and os.path.isdir(self._node.output_dir)) else ""
+        chosen = QFileDialog.getExistingDirectory(self, "Select Folder to Save Synthesized WAV Files", start_dir)
+        if chosen:
+            self._node.output_dir = chosen
+            self.edit_tts_output_dir.setText(chosen)
+
+    def _on_tts_replay_clicked(self) -> None:
+        if not self._node:
+            return
+        engine = self._get_engine()
+        from phonoryx.tts_service import tts_manager
+        if not tts_manager.replay(engine, self._node.id):
+            self._on_tts_speak_clicked()
+
+    def _on_tts_speak_clicked(self) -> None:
+        if not self._node:
+            return
+        text = self._node.text.strip()
+        if not text:
+            self.lbl_tts_status.setText("Prompt cannot be empty")
+            self.lbl_tts_status.setStyleSheet("color: #F87171; font-size: 11px;")
+            return
+        engine = self._get_engine()
+        from phonoryx.tts_service import tts_manager
+        self.btn_tts_speak.setEnabled(False)
+        self.btn_tts_stop.setEnabled(True)
+        self.lbl_tts_status.setText("Synthesizing...")
+        self.lbl_tts_status.setStyleSheet("color: #FFC114; font-size: 11px;")
+        tts_manager.speak(
+            engine=engine,
+            node_id=self._node.id,
+            text=text,
+            voice_profile_path=self._node.voice_profile_path or None,
+            reference_text=self._node.reference_text or None,
+            temperature=self._node.temperature,
+            top_p=self._node.top_p,
+            top_k=self._node.top_k,
+            max_new_tokens=self._node.max_new_tokens,
+            output_dir=self._node.output_dir or None,
+        )
+
+    def _on_tts_stop_clicked(self) -> None:
+        if not self._node:
+            return
+        engine = self._get_engine()
+        from phonoryx.tts_service import tts_manager
+        tts_manager.stop(engine, self._node.id)
+        self.btn_tts_speak.setEnabled(True)
+        self.btn_tts_stop.setEnabled(False)
+        self.lbl_tts_status.setText("Stopped")
+        self.lbl_tts_status.setStyleSheet("color: #8A8A8A; font-size: 11px;")
+
+    def _browse_player_file(self) -> None:
+        if not self._node:
+            return
+        start_dir = os.path.dirname(self._node.file_path) if self._node.file_path else ""
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Audio File",
+            start_dir,
+            "Audio Files (*.wav *.mp3 *.flac *.ogg *.m4a *.aiff);;All Files (*.*)",
+        )
+        if path:
+            self._node.file_path = path
+            self.edit_player_file.setText(path)
+
+    def _on_player_loop_toggled(self, checked: bool) -> None:
+        if self._loading or not self._node:
+            return
+        self._node.loop = checked
+        from phonoryx.player_service import get_player_manager
+        get_player_manager().set_loop(self._node.id, checked)
+
+    def _on_player_play_clicked(self) -> None:
+        if not self._node:
+            return
+        if not self._node.file_path:
+            self._browse_player_file()
+            if not self._node.file_path:
+                self.lbl_player_status.setText("No file selected")
+                self.lbl_player_status.setStyleSheet("color: #F87171; font-size: 11px;")
+                return
+        engine = self._get_engine()
+        from phonoryx.player_service import get_player_manager
+        pm = get_player_manager()
+        pm.play(
+            engine=engine,
+            node_id=self._node.id,
+            file_path=self._node.file_path,
+            loop=self._node.loop,
+        )
+        self.lbl_player_status.setText("Playing")
+        self.lbl_player_status.setStyleSheet("color: #4ADE80; font-size: 11px;")
+
+    def _on_player_stop_clicked(self) -> None:
+        if not self._node:
+            return
+        engine = self._get_engine()
+        from phonoryx.player_service import get_player_manager
+        get_player_manager().stop(engine, self._node.id)
+        self.lbl_player_status.setText("Stopped")
+        self.lbl_player_status.setStyleSheet("color: #8A8A8A; font-size: 11px;")
 
 
 class BottomTelemetryPanel(QWidget):

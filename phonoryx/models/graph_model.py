@@ -54,6 +54,14 @@ NODE_SPECS: Dict[NodeType, NodeSpec] = {
         ("Out",),
         "Captures audio from a physical microphone, line-in, or hardware audio interface.",
     ),
+    NodeType.TTS: NodeSpec(
+        NodeType.TTS,
+        "Text to Speech (TTS)",
+        NodeCategory.SOURCE,
+        (),
+        ("Out",),
+        "Neural text-to-speech engine with zero-shot voice cloning and 44.1 kHz neural codec output.",
+    ),
     NodeType.VIRTUAL_INPUT: NodeSpec(
         NodeType.VIRTUAL_INPUT,
         "Virtual Device Input",
@@ -61,6 +69,14 @@ NODE_SPECS: Dict[NodeType, NodeSpec] = {
         (),
         ("Out",),
         "Captures audio from a Windows virtual audio endpoint (e.g. Virtual Audio Driver).",
+    ),
+    NodeType.AUDIO_PLAYER: NodeSpec(
+        NodeType.AUDIO_PLAYER,
+        "Audio Player",
+        NodeCategory.SOURCE,
+        (),
+        ("Out",),
+        "Plays audio from a local audio file (.wav, .mp3, .flac, etc.) with switch trigger and loop repeat.",
     ),
     # Audio Processing Nodes
     NodeType.VOLUME: NodeSpec(
@@ -187,6 +203,17 @@ class NodeModel:
     group_id: Optional[int] = None
     width: Optional[float] = None
     height: Optional[float] = None
+    # Text-to-Speech (TTS) configuration
+    text: str = ""
+    reference_text: str = ""
+    temperature: float = 0.8
+    top_p: float = 0.95
+    top_k: int = 50
+    max_new_tokens: int = 1024
+    voice_profile_path: str = ""
+    output_dir: str = ""
+    # Audio Player configuration
+    loop: bool = False
 
     def __post_init__(self) -> None:
         self.volume = max(0.0, min(2.0, float(self.volume)))
@@ -195,6 +222,10 @@ class NodeModel:
         while len(eq) < 5:
             eq.append(0.0)
         self.eq_gains_db = eq
+        self.temperature = max(0.1, min(1.5, float(self.temperature)))
+        self.top_p = max(0.1, min(1.0, float(self.top_p)))
+        self.top_k = max(1, min(100, int(self.top_k)))
+        self.max_new_tokens = max(16, min(4096, int(self.max_new_tokens)))
 
     def set_eq_gain(self, band: int, db: float) -> float:
         val = max(-18.0, min(18.0, float(db)))
@@ -218,10 +249,18 @@ class NodeModel:
         eq = [max(-18.0, min(18.0, float(v))) for v in self.eq_gains_db[:5]]
         while len(eq) < 5:
             eq.append(0.0)
+        dev_id = self.device_id
+        node_type_val = int(self.node_type)
+        if self.node_type == NodeType.AUDIO_PLAYER:
+            node_type_val = int(NodeType.TTS)  # Engine type 4: ring-buffered source node
+            if not dev_id:
+                dev_id = f"tts://player/{self.id}"
+        elif self.node_type == NodeType.TTS and not dev_id:
+            dev_id = f"tts://{self.id}"
         return {
             "id": int(self.id),
-            "type": int(self.node_type),
-            "device_id": self.device_id,
+            "type": node_type_val,
+            "device_id": dev_id,
             "pid": int(self.capture_pid or self.pid),
             "file_path": self.file_path,
             "volume": vol,
@@ -257,6 +296,15 @@ class NodeModel:
             "sample_rate": int(self.sample_rate),
             "channels": int(self.channels),
             "group_id": self.group_id,
+            "text": self.text,
+            "reference_text": self.reference_text,
+            "temperature": float(self.temperature),
+            "top_p": float(self.top_p),
+            "top_k": int(self.top_k),
+            "max_new_tokens": int(self.max_new_tokens),
+            "voice_profile_path": self.voice_profile_path,
+            "output_dir": self.output_dir,
+            "loop": bool(self.loop),
         }
         if self.width is not None:
             data["width"] = float(self.width)
@@ -273,12 +321,20 @@ class NodeModel:
         while len(eq) < 5:
             eq.append(0.0)
         raw_type = int(raw["type"])
-        legacy_map = {
-            4: int(NodeType.MIC_INPUT),
-            202: int(NodeType.SPEAKER_OUTPUT),
-            204: int(NodeType.VIRTUAL_OUTPUT),
-        }
-        node_type = NodeType(legacy_map.get(raw_type, raw_type))
+        type_name = raw.get("type_name")
+        if type_name == "TTS":
+            node_type = NodeType.TTS
+        elif type_name == "AUDIO_PLAYER" or raw_type == 6:
+            node_type = NodeType.AUDIO_PLAYER
+        elif raw_type == 4 and type_name != "TTS" and ("text" not in raw and not str(raw.get("device_id", "")).startswith("tts://")):
+            # Legacy Line In migration
+            node_type = NodeType.MIC_INPUT
+        else:
+            legacy_map = {
+                202: int(NodeType.SPEAKER_OUTPUT),
+                204: int(NodeType.VIRTUAL_OUTPUT),
+            }
+            node_type = NodeType(legacy_map.get(raw_type, raw_type))
         return cls(
             id=int(raw["id"]),
             node_type=node_type,
@@ -301,6 +357,15 @@ class NodeModel:
             group_id=raw.get("group_id"),
             width=float(raw["width"]) if raw.get("width") is not None else None,
             height=float(raw["height"]) if raw.get("height") is not None else None,
+            text=str(raw.get("text", "")),
+            reference_text=str(raw.get("reference_text", "")),
+            temperature=float(raw.get("temperature", 0.8)),
+            top_p=float(raw.get("top_p", 0.95)),
+            top_k=int(raw.get("top_k", 50)),
+            max_new_tokens=int(raw.get("max_new_tokens", 1024)),
+            voice_profile_path=str(raw.get("voice_profile_path", "")),
+            output_dir=str(raw.get("output_dir", "")),
+            loop=bool(raw.get("loop", False)),
         )
 
 

@@ -39,6 +39,7 @@ typedef enum af_node_type_t {
     AF_NODE_APP_CAPTURE = 1,
     AF_NODE_SYSTEM_CAPTURE = 2,
     AF_NODE_MIC_INPUT = 3,
+    AF_NODE_TTS = 4,
     AF_NODE_VIRTUAL_INPUT = 5,
 
     /* Processing nodes */
@@ -178,6 +179,17 @@ AF_API int32_t af_poll_logs(
     af_log_entry_t* out_logs,
     int32_t max_logs);
 
+/* Audio frame streaming / injection for Source nodes (e.g. TTS, test harness) */
+AF_API int32_t af_push_source_audio(
+    af_engine_t* engine,
+    uint64_t node_id,
+    const float* stereo_in,
+    int32_t frames);
+
+AF_API int32_t af_clear_source_audio(
+    af_engine_t* engine,
+    uint64_t node_id);
+
 /* Modern Phonoryx C ABI types */
 typedef af_engine_t phonoryx_engine_t;
 typedef af_data_flow_t phonoryx_data_flow_t;
@@ -229,6 +241,14 @@ AF_API int32_t phonoryx_poll_logs(
     phonoryx_engine_t* engine,
     phonoryx_log_entry_t* out_logs,
     int32_t max_logs);
+AF_API int32_t phonoryx_push_source_audio(
+    phonoryx_engine_t* engine,
+    uint64_t node_id,
+    const float* stereo_in,
+    int32_t frames);
+AF_API int32_t phonoryx_clear_source_audio(
+    phonoryx_engine_t* engine,
+    uint64_t node_id);
 
 #ifdef __cplusplus
 }

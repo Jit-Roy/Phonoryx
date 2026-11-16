@@ -131,6 +131,24 @@ AF_API int32_t af_poll_logs(
     return engine->impl.logs().pop_batch(out_logs, max_logs);
 }
 
+AF_API int32_t af_push_source_audio(
+    af_engine_t* engine,
+    uint64_t node_id,
+    const float* stereo_in,
+    int32_t frames)
+{
+    if (!engine || !stereo_in || frames <= 0) return 0;
+    return engine->impl.push_source_audio(node_id, stereo_in, static_cast<size_t>(frames));
+}
+
+AF_API int32_t af_clear_source_audio(
+    af_engine_t* engine,
+    uint64_t node_id)
+{
+    if (!engine) return -1;
+    return engine->impl.clear_source_audio(node_id) ? 0 : -1;
+}
+
 /* Modern Phonoryx C ABI exports */
 AF_API phonoryx_engine_t* phonoryx_engine_create(uint32_t sample_rate, uint32_t block_frames) {
     return af_engine_create(sample_rate, block_frames);
@@ -216,6 +234,22 @@ AF_API int32_t phonoryx_poll_logs(
     int32_t max_logs)
 {
     return af_poll_logs(engine, out_logs, max_logs);
+}
+
+AF_API int32_t phonoryx_push_source_audio(
+    phonoryx_engine_t* engine,
+    uint64_t node_id,
+    const float* stereo_in,
+    int32_t frames)
+{
+    return af_push_source_audio(engine, node_id, stereo_in, frames);
+}
+
+AF_API int32_t phonoryx_clear_source_audio(
+    phonoryx_engine_t* engine,
+    uint64_t node_id)
+{
+    return af_clear_source_audio(engine, node_id);
 }
 
 } // extern "C"

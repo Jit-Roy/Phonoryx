@@ -106,6 +106,10 @@ public:
         return master_watchdog_timeout_ms_.load(std::memory_order_relaxed);
     }
 
+    // Source audio injection (TTS, virtual inputs, test harness)
+    int32_t push_source_audio(uint64_t node_id, const float* stereo_in, size_t frames);
+    bool clear_source_audio(uint64_t node_id);
+
     // Deterministic test helpers (also exercises exact RT execution path)
     void process_single_block(CompiledGraphSnapshot* snap);
     bool test_push_source_audio(uint64_t node_id, const float* stereo_in, size_t frames);

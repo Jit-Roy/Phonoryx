@@ -302,9 +302,11 @@ bool AudioEngine::apply_graph_json(const char* json_text, std::string& err_out) 
         }
 
         const bool is_test_uri = (s.device_id.rfind("test://", 0) == 0);
-        if (is_test_uri) {
+        const bool is_tts = (s.type == AF_NODE_TTS || s.device_id.rfind("tts://", 0) == 0);
+        if (is_test_uri || is_tts) {
             if (!res.test_in_ring && is_source_node(s.type)) {
-                res.test_in_ring = std::make_shared<StereoRingBuffer>(32768);
+                const size_t ring_cap = is_tts ? 524288 : 32768;
+                res.test_in_ring = std::make_shared<StereoRingBuffer>(ring_cap);
             }
             if (!res.test_out_ring && is_output_node(s.type)) {
                 res.test_out_ring = std::make_shared<StereoRingBuffer>(32768);
@@ -317,7 +319,7 @@ bool AudioEngine::apply_graph_json(const char* json_text, std::string& err_out) 
                 res.endpoint->stop();
                 res.endpoint.reset();
             }
-            if (!is_test_uri) {
+            if (!is_test_uri && !is_tts) {
                 if (s.type == AF_NODE_APP_CAPTURE) {
                     res.endpoint = std::make_shared<WasapiEndpointWorker>(
                         s.id, EndpointMode::ProcessLoopback, "", s.pid, sample_rate_, &logs_);
@@ -540,7 +542,7 @@ void AudioEngine::process_single_block(CompiledGraphSnapshot* snap) {
         std::memset(work, 0, frames * 2 * sizeof(float));
 
         if (is_source_node(node.type)) {
-            if (node.test_in_ring && node.test_in_ring->available_read() >= frames) {
+            if (node.test_in_ring && node.test_in_ring->available_read() > 0) {
                 node.test_in_ring->read(work, frames);
             } else if (node.endpoint) {
                 node.endpoint->read_capture_block(work, frames);
@@ -757,6 +759,33 @@ void AudioEngine::rt_loop() {
     if (timer) CloseHandle(timer);
     if (avrt) AvRevertMmThreadCharacteristics(avrt);
     timeEndPeriod(1);
+}
+
+int32_t AudioEngine::push_source_audio(uint64_t node_id, const float* stereo_in, size_t frames) {
+    std::shared_ptr<StereoRingBuffer> ring;
+    {
+        std::lock_guard<std::mutex> lock(ctrl_mutex_);
+        auto it = resources_.find(node_id);
+        if (it != resources_.end()) {
+            ring = it->second.test_in_ring;
+        }
+    }
+    if (!ring || !stereo_in || frames == 0) return 0;
+    return static_cast<int32_t>(ring->write(stereo_in, frames));
+}
+
+bool AudioEngine::clear_source_audio(uint64_t node_id) {
+    std::shared_ptr<StereoRingBuffer> ring;
+    {
+        std::lock_guard<std::mutex> lock(ctrl_mutex_);
+        auto it = resources_.find(node_id);
+        if (it != resources_.end()) {
+            ring = it->second.test_in_ring;
+        }
+    }
+    if (!ring) return false;
+    ring->reset();
+    return true;
 }
 
 bool AudioEngine::test_push_source_audio(uint64_t node_id, const float* stereo_in, size_t frames) {

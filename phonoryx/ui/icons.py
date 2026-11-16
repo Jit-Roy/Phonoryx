@@ -414,6 +414,34 @@ def draw_node_type_icon(p: QPainter, rect: QRectF, node_type: NodeType) -> None:
         p.drawLine(QPointF(x + w * 0.50, y + h * 0.70), QPointF(x + w * 0.50, y + h * 0.84))
         p.drawLine(QPointF(x + w * 0.34, y + h * 0.84), QPointF(x + w * 0.66, y + h * 0.84))
 
+    elif node_type == NodeType.TTS:
+        # Speech bubble in accent + white sound wave bars
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(accent))
+        bubble = QPainterPath()
+        bubble.addRoundedRect(QRectF(x + w * 0.12, y + h * 0.16, w * 0.76, h * 0.54), 3.0, 3.0)
+        bubble.moveTo(x + w * 0.28, y + h * 0.70)
+        bubble.lineTo(x + w * 0.22, y + h * 0.86)
+        bubble.lineTo(x + w * 0.44, y + h * 0.70)
+        bubble.closeSubpath()
+        p.drawPath(bubble)
+        p.setBrush(QColor("#FFFFFF"))
+        for xr, top, bh in ((0.28, 0.36, 0.16), (0.42, 0.28, 0.30), (0.56, 0.32, 0.22), (0.70, 0.40, 0.10)):
+            p.drawRoundedRect(QRectF(x + w * xr, y + h * top, w * 0.08, h * bh), 1.0, 1.0)
+
+    elif node_type == NodeType.AUDIO_PLAYER:
+        # Clean audio file card with centered play triangle
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(accent))
+        p.drawRoundedRect(QRectF(x + w * 0.14, y + h * 0.14, w * 0.72, h * 0.72), 3.0, 3.0)
+        p.setBrush(QColor("#FFFFFF"))
+        tri = QPolygonF([
+            QPointF(x + w * 0.38, y + h * 0.30),
+            QPointF(x + w * 0.72, y + h * 0.50),
+            QPointF(x + w * 0.38, y + h * 0.70),
+        ])
+        p.drawPolygon(tri)
+
     elif node_type == NodeType.VOLUME:
         # Speaker shape in accent + white arc waves
         p.setPen(Qt.PenStyle.NoPen)

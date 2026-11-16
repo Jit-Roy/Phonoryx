@@ -159,8 +159,8 @@ def test_project_save_load_preserves_unavailable_device_without_fallback(tmp_pat
 
 
 def test_all_required_node_specs_present():
-    # 4 source + 9 processing + 3 output = 16 required node types
-    assert len(NODE_SPECS) == 16
+    # 6 source (App, Mic, Line, Tone, TTS, Player) + 9 processing + 3 output = 18 required node types
+    assert len(NODE_SPECS) == 18
     for nt in NodeType:
         assert nt in NODE_SPECS
 
@@ -2121,6 +2121,384 @@ def test_parameter_validation_and_sanitization():
         assert engine.set_float_param(2, "volume", 55.0)
     finally:
         engine.close()
+
+
+def test_tts_node_model_serialization_and_validation():
+    from phonoryx.models.graph_model import NodeCategory
+    assert NodeType.TTS in NODE_SPECS
+    spec = NODE_SPECS[NodeType.TTS]
+    assert spec.category == NodeCategory.SOURCE
+    assert spec.input_ports == ()
+    assert spec.output_ports == ("Out",)
+
+    node = NodeModel(
+        id=5,
+        node_type=NodeType.TTS,
+        text="Hello Edge Audio",
+        voice_profile_path=r"D:\Personal Projects\Edge Audio\voice_cache\lifestyle_influencer.pt",
+        temperature=0.75,
+        top_p=0.9,
+        top_k=40,
+        max_new_tokens=512,
+        output_dir=r"C:\audio_out",
+    )
+    # Validation checks
+    assert node.temperature == 0.75
+    assert node.top_p == 0.9
+    assert node.top_k == 40
+    assert node.max_new_tokens == 512
+    assert node.output_dir == r"C:\audio_out"
+
+    # Clamping checks
+    clamped = NodeModel(
+        id=6,
+        node_type=NodeType.TTS,
+        temperature=99.0,
+        top_p=-5.0,
+        top_k=9999,
+        max_new_tokens=99999,
+    )
+    assert clamped.temperature == 1.5
+    assert clamped.top_p == 0.1
+    assert clamped.top_k == 100
+    assert clamped.max_new_tokens == 4096
+
+    # Project serialization roundtrip
+    proj_dict = node.to_project_dict()
+    assert proj_dict["text"] == "Hello Edge Audio"
+    assert proj_dict["temperature"] == 0.75
+    assert proj_dict["output_dir"] == r"C:\audio_out"
+
+    restored = NodeModel.from_project_dict(proj_dict)
+    assert restored.node_type == NodeType.TTS
+    assert restored.text == "Hello Edge Audio"
+    assert restored.temperature == 0.75
+    assert restored.output_dir == r"C:\audio_out"
+
+
+def test_tts_voice_profile_discovery():
+    from phonoryx.tts_service import (
+        extract_reference_text_from_profile,
+        list_voice_profiles,
+        resolve_model_dir,
+        resolve_voice_dir,
+    )
+    model_dir = resolve_model_dir()
+    assert str(model_dir).endswith(r"Edge Audio\model")
+
+    voice_dir = resolve_voice_dir()
+    assert str(voice_dir).endswith(r"Edge Audio\voice_cache")
+
+    profiles = list_voice_profiles()
+    if os.path.exists(voice_dir):
+        assert isinstance(profiles, list)
+        lifestyle = next((p for p in profiles if "lifestyle" in p["name"].lower()), None)
+        if lifestyle:
+            assert lifestyle["path"].endswith(".pt")
+            ref_txt = extract_reference_text_from_profile(lifestyle["path"])
+            assert "bothering me" in ref_txt
+
+
+def test_tts_replay_and_output_dir_save(tmp_path: Path):
+    import numpy as np
+    from phonoryx.tts_service import sanitize_filename, tts_manager
+
+    # Test filename sanitizer
+    raw_prompt = "Hello! Is this working: a test / file?"
+    safe = sanitize_filename(raw_prompt)
+    assert "/" not in safe
+    assert ":" not in safe
+    assert "?" not in safe
+
+    # Test TTSServiceManager caching and replay
+    engine = PhonoryxEngine(sample_rate=48000, block_frames=480)
+    try:
+        ok, _ = engine.apply_graph({
+            "nodes": [
+                {"id": 25, "type": int(NodeType.TTS), "device_id": "tts://25"},
+                {"id": 26, "type": int(NodeType.SPEAKER_OUTPUT), "device_id": "test://out"},
+            ],
+            "connections": [
+                {"src_node": 25, "src_port": 0, "dst_node": 26, "dst_port": 0},
+            ],
+        })
+        assert ok
+
+        dummy_audio = np.zeros((4800, 2), dtype=np.float32)
+        tts_manager.cache_audio(25, dummy_audio, 48000)
+        assert tts_manager.has_cached_audio(25)
+
+        replayed = tts_manager.replay(engine, 25)
+        assert replayed is True
+    finally:
+        engine.close()
+
+
+def test_audio_player_model_and_engine_mapping():
+    from phonoryx.models.graph_model import NodeCategory
+    assert NodeType.AUDIO_PLAYER in NODE_SPECS
+    spec = NODE_SPECS[NodeType.AUDIO_PLAYER]
+    assert spec.category == NodeCategory.SOURCE
+    assert spec.title == "Audio Player"
+    assert spec.input_ports == ()
+    assert spec.output_ports == ("Out",)
+
+    node = NodeModel(
+        id=7,
+        node_type=NodeType.AUDIO_PLAYER,
+        file_path=r"C:\audio\sample.wav",
+        loop=True,
+    )
+    # Verify engine mapping routes to type 4 (TTS ring buffer engine source)
+    eng_dict = node.to_engine_dict()
+    assert eng_dict["id"] == 7
+    assert eng_dict["type"] == int(NodeType.TTS)
+    assert eng_dict["device_id"] == "tts://player/7"
+
+    # Verify project serialization roundtrip
+    proj = node.to_project_dict()
+    assert proj["loop"] is True
+    assert proj["type_name"] == "AUDIO_PLAYER"
+    assert proj["file_path"] == r"C:\audio\sample.wav"
+
+    restored = NodeModel.from_project_dict(proj)
+    assert restored.node_type == NodeType.AUDIO_PLAYER
+    assert restored.loop is True
+    assert restored.file_path == r"C:\audio\sample.wav"
+
+
+def test_audio_player_file_loading_and_streaming(tmp_path: Path):
+    import numpy as np
+    import soundfile as sf
+    from phonoryx.player_service import load_audio_file, get_player_manager
+
+    # Generate a clean 1-second 44.1 kHz sine wave WAV
+    wav_path = str(tmp_path / "test_sine.wav")
+    sr = 44100
+    t = np.linspace(0.0, 1.0, sr, endpoint=False)
+    sine = (0.5 * np.sin(2 * np.pi * 440.0 * t)).astype(np.float32)
+    sf.write(wav_path, sine, sr)
+
+    # Test loading and auto-resampling to 48 kHz stereo
+    audio, out_sr = load_audio_file(wav_path, target_sr=48000)
+    assert out_sr == 48000
+    assert audio.ndim == 2
+    assert audio.shape[1] == 2
+    assert abs(audio.shape[0] - 48000) < 50
+
+    # Stream into engine
+    engine = PhonoryxEngine(sample_rate=48000, block_frames=480)
+    try:
+        ok, _ = engine.apply_graph({
+            "nodes": [
+                {"id": 15, "type": int(NodeType.TTS), "device_id": "tts://player/15"},
+                {"id": 16, "type": int(NodeType.SPEAKER_OUTPUT), "device_id": "test://out"},
+            ],
+            "connections": [
+                {"src_node": 15, "src_port": 0, "dst_node": 16, "dst_port": 0},
+            ],
+        })
+        assert ok
+
+        pm = get_player_manager()
+        res = pm.play(engine=engine, node_id=15, file_path=wav_path, loop=False)
+        assert res is True
+        import time
+        time.sleep(0.15)
+        pm.stop(engine, 15)
+    finally:
+        engine.close()
+
+
+def test_comfyui_ctrl_c_copy_and_ctrl_v_paste(qapp, tmp_path: Path):
+    import json
+    from phonoryx.models.graph_model import ProjectModel, NodeType
+    from phonoryx.ui.canvas import NodeCanvas
+
+    project = ProjectModel()
+    canvas = NodeCanvas(project)
+    canvas.resize(800, 600)
+
+    # Create two connected nodes
+    n1 = canvas.add_node_action(NodeType.MIC_INPUT, scene_pos=QPointF(100, 100))
+    n2 = canvas.add_node_action(NodeType.VOLUME, scene_pos=QPointF(350, 100))
+    canvas.connect_ports_action(n1.id, 0, n2.id, 0)
+    assert len(canvas.project.nodes) == 2
+    assert len(canvas.project.connections) == 1
+
+    # Select both nodes
+    item1 = canvas.node_items[n1.id]
+    item2 = canvas.node_items[n2.id]
+    item1.setSelected(True)
+    item2.setSelected(True)
+
+    # 1. Test Copy (Ctrl+C)
+    copied = canvas.copy_selected_action()
+    assert copied is True
+
+    clipboard = QApplication.clipboard()
+    raw_text = clipboard.text()
+    data = json.loads(raw_text)
+    assert data["phonoryx_nodes"] is True
+    assert len(data["nodes"]) == 2
+    assert len(data["connections"]) == 1
+
+    # 2. Test Paste (Ctrl+V)
+    pasted = canvas.paste_action()
+    assert pasted is True
+    assert len(canvas.project.nodes) == 4
+    assert len(canvas.project.connections) == 2
+
+    # Check newly pasted nodes have distinct IDs and internal wire preserved
+    pasted_nodes = [item.model for item in canvas.node_items.values() if item.model.id not in (n1.id, n2.id)]
+    assert len(pasted_nodes) == 2
+    pasted_ids = {p.id for p in pasted_nodes}
+    assert n1.id not in pasted_ids and n2.id not in pasted_ids
+
+    # Find the new connection
+    new_conn = next(c for c in canvas.project.connections if c.src_node in pasted_ids)
+    assert new_conn.dst_node in pasted_ids
+
+    # 3. Test Undo of paste
+    canvas.undo_stack.undo()
+    qapp.processEvents()
+    assert len(canvas.project.nodes) == 2
+    assert len(canvas.project.connections) == 1
+
+    # 4. Test Redo of paste
+    canvas.undo_stack.redo()
+    qapp.processEvents()
+    assert len(canvas.project.nodes) == 4
+    assert len(canvas.project.connections) == 2
+
+    canvas._anim_timer.stop()
+    canvas.deleteLater()
+    qapp.processEvents()
+
+
+def test_tts_ref_text_scrollable_multiline(qapp):
+    from PySide6.QtWidgets import QPlainTextEdit
+    from phonoryx.models.graph_model import ProjectModel, NodeType
+    from phonoryx.ui.canvas import NodeCanvas
+
+    project = ProjectModel()
+    canvas = NodeCanvas(project)
+    tts_node = canvas.add_node_action(
+        NodeType.TTS,
+        scene_pos=QPointF(50, 50),
+        text="Sample prompt",
+        reference_text="A very long paragraph for reference speech transcript that needs vertical scrolling.",
+    )
+    item = canvas.node_items[tts_node.id]
+    assert item.edit_tts_ref_text is not None
+    assert isinstance(item.edit_tts_ref_text, QPlainTextEdit)
+    assert item.edit_tts_ref_text.height() >= 50
+    assert item.edit_tts_ref_text.toPlainText().startswith("A very long paragraph")
+    assert item.edit_tts_ref_text.verticalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAsNeeded
+
+    canvas._anim_timer.stop()
+    canvas.deleteLater()
+    qapp.processEvents()
+
+
+def test_tts_text_focus_ctrl_a_selects_text_not_nodes(qapp):
+    from PySide6.QtGui import QKeyEvent
+    from phonoryx.models.graph_model import ProjectModel, NodeType
+    from phonoryx.ui.canvas import NodeCanvas
+
+    project = ProjectModel()
+    canvas = NodeCanvas(project)
+    canvas.show()
+    qapp.processEvents()
+
+    tts_node = canvas.add_node_action(
+        NodeType.TTS,
+        scene_pos=QPointF(50, 50),
+        text="The quick brown fox jumps over the lazy dog",
+    )
+    tts_item = canvas.node_items[tts_node.id]
+    assert tts_item.edit_tts_text is not None
+
+    # Focus the TTS prompt text editor
+    tts_item.edit_tts_text.setFocus()
+    qapp.processEvents()
+    assert canvas._is_text_editing_active() is True
+
+    # Press Ctrl+A while focused inside TTS text editor
+    ctrl_a_event = QKeyEvent(
+        QKeyEvent.Type.KeyPress,
+        Qt.Key.Key_A,
+        Qt.KeyboardModifier.ControlModifier,
+        "a",
+    )
+    canvas.keyPressEvent(ctrl_a_event)
+    qapp.processEvents()
+
+    # Verify: The text inside QPlainTextEdit is selected
+    selected_text = tts_item.edit_tts_text.textCursor().selectedText()
+    assert selected_text == "The quick brown fox jumps over the lazy dog"
+    # Verify: Canvas nodes are NOT selected
+    assert not tts_item.isSelected()
+
+    # Clear focus from text editor and focus the canvas view
+    tts_item.edit_tts_text.clearFocus()
+    canvas.scene_obj.clearFocus()
+    canvas.setFocus()
+    qapp.processEvents()
+    assert canvas._is_text_editing_active() is False
+
+    # Press Ctrl+A while on canvas
+    canvas.keyPressEvent(ctrl_a_event)
+    qapp.processEvents()
+
+    # Verify: Now the canvas node IS selected
+    assert tts_item.isSelected()
+
+    canvas._anim_timer.stop()
+    canvas.deleteLater()
+    qapp.processEvents()
+
+
+def test_tts_ref_audio_line_edit_and_on_the_fly_wav_conversion(qapp, tmp_path: Path):
+    import numpy as np
+    import soundfile as sf
+    from PySide6.QtWidgets import QLineEdit
+    from phonoryx.models.graph_model import ProjectModel, NodeType
+    from phonoryx.ui.canvas import NodeCanvas
+    from phonoryx.tts_service import prepare_reference_audio
+
+    # 1. Test UI: Ref Audio is a QLineEdit (no combobox) like Save Dir
+    project = ProjectModel()
+    canvas = NodeCanvas(project)
+    tts_node = canvas.add_node_action(NodeType.TTS, scene_pos=QPointF(50, 50))
+    item = canvas.node_items[tts_node.id]
+
+    assert hasattr(item, "edit_tts_voice")
+    assert isinstance(item.edit_tts_voice, QLineEdit)
+    assert not hasattr(item, "cmb_tts_voice") or item.cmb_tts_voice is None
+    assert item.btn_tts_browse_voice is not None
+
+    # Test editing ref audio path line edit
+    sample_path = str(tmp_path / "ref_speech.wav")
+    item.edit_tts_voice.setText(sample_path)
+    assert item.model.voice_profile_path == sample_path
+
+    canvas._anim_timer.stop()
+    canvas.deleteLater()
+    qapp.processEvents()
+
+    # 2. Test on-the-fly conversion: creates 48 kHz stereo file, converted into 44.1 kHz mono WAV
+    src_file = str(tmp_path / "stereo_source.wav")
+    t = np.linspace(0.0, 0.5, 24000, endpoint=False)
+    stereo_data = np.column_stack([np.sin(2 * np.pi * 440 * t), np.cos(2 * np.pi * 440 * t)]).astype(np.float32)
+    sf.write(src_file, stereo_data, 48000)
+
+    converted_wav = prepare_reference_audio(src_file)
+    assert os.path.isfile(converted_wav)
+    info = sf.info(converted_wav)
+    assert info.samplerate == 44100
+    assert info.channels == 1
+    assert info.format == "WAV"
 
 
 

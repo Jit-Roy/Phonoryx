@@ -9,7 +9,7 @@ import sys
 from dataclasses import dataclass
 from enum import IntEnum
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 
 class DataFlow(IntEnum):
@@ -31,7 +31,9 @@ class NodeType(IntEnum):
     APP_CAPTURE = 1
     SYSTEM_CAPTURE = 2
     MIC_INPUT = 3
+    TTS = 4
     VIRTUAL_INPUT = 5
+    AUDIO_PLAYER = 6
 
     # Audio Processing Nodes
     VOLUME = 101
@@ -308,12 +310,21 @@ class PhonoryxEngine:
             "phonoryx_poll_logs", "af_poll_logs",
             [c_void_p, ctypes.POINTER(_AfLogEntry), ctypes.c_int32], ctypes.c_int32
         )
+        self._fn_push_source_audio = bind(
+            "phonoryx_push_source_audio", "af_push_source_audio",
+            [c_void_p, ctypes.c_uint64, ctypes.POINTER(ctypes.c_float), ctypes.c_int32],
+            ctypes.c_int32,
+        )
+        self._fn_clear_source_audio = bind(
+            "phonoryx_clear_source_audio", "af_clear_source_audio",
+            [c_void_p, ctypes.c_uint64],
+            ctypes.c_int32,
+        )
 
     def _call_create(self, sample_rate: int, block_frames: int):
         return self._fn_create(
             ctypes.c_uint32(sample_rate), ctypes.c_uint32(block_frames)
         )
-        lib.af_poll_logs.restype = ctypes.c_int32
 
     def close(self) -> None:
         if self._handle:
@@ -485,4 +496,60 @@ class PhonoryxEngine:
             )
             for i in range(max(0, count))
         ]
+
+    def push_source_audio(
+        self, node_id: int, stereo_data: Any
+    ) -> int:
+        """Push interleaved stereo float32 frames into a source node's input ring buffer.
+
+        Accepts a NumPy array (shape (N, 2) or (2*N,)), float list/tuple, or raw bytes.
+        Returns the number of audio frames successfully enqueued.
+        """
+        if not self._handle or stereo_data is None:
+            return 0
+
+        # Try numpy array if available
+        if hasattr(stereo_data, "__array_interface__"):
+            import numpy as np
+            arr = np.ascontiguousarray(stereo_data, dtype=np.float32)
+            frames = arr.size // 2
+            if frames <= 0:
+                return 0
+            ptr = arr.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
+            return int(
+                self._fn_push_source_audio(
+                    self._handle, ctypes.c_uint64(node_id), ptr, ctypes.c_int32(frames)
+                )
+            )
+
+        if isinstance(stereo_data, (list, tuple)):
+            frames = len(stereo_data) // 2
+            if frames <= 0:
+                return 0
+            c_arr = (ctypes.c_float * len(stereo_data))(*[float(x) for x in stereo_data])
+            return int(
+                self._fn_push_source_audio(
+                    self._handle, ctypes.c_uint64(node_id), c_arr, ctypes.c_int32(frames)
+                )
+            )
+
+        if isinstance(stereo_data, (bytes, bytearray, memoryview)):
+            raw_b = bytes(stereo_data)
+            frames = len(raw_b) // (2 * 4)  # 2 channels * 4 bytes per float32
+            if frames <= 0:
+                return 0
+            ptr = ctypes.cast(ctypes.c_char_p(raw_b), ctypes.POINTER(ctypes.c_float))
+            return int(
+                self._fn_push_source_audio(
+                    self._handle, ctypes.c_uint64(node_id), ptr, ctypes.c_int32(frames)
+                )
+            )
+
+        return 0
+
+    def clear_source_audio(self, node_id: int) -> bool:
+        """Clear/reset audio frames queued in a source node's input ring buffer."""
+        if not self._handle:
+            return False
+        return self._fn_clear_source_audio(self._handle, ctypes.c_uint64(node_id)) == 0
 

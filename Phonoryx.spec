@@ -13,12 +13,12 @@ if os.path.isdir(assets_dir):
 binaries = []
 dll_candidates = [
     os.path.join(base_dir, "assets", "bin", "phonoryx_engine.dll"),
+    os.path.join(base_dir, "build", "bin", "Release", "phonoryx_engine.dll"),
     os.path.join(base_dir, "build", "engine", "bin", "Release", "phonoryx_engine.dll"),
 ]
 for dll_path in dll_candidates:
     if os.path.isfile(dll_path):
         binaries.append((dll_path, "."))
-        binaries.append((dll_path, os.path.join("assets", "bin")))
         break
 
 hiddenimports = [
@@ -27,11 +27,14 @@ hiddenimports = [
     "PySide6.QtWidgets",
     "PySide6.QtSvg",
     "shiboken6",
+    "soundfile",
     "phonoryx",
     "phonoryx.__main__",
     "phonoryx.engine_bridge",
     "phonoryx.models",
     "phonoryx.models.graph_model",
+    "phonoryx.player_service",
+    "phonoryx.tts_service",
     "phonoryx.ui",
     "phonoryx.ui.canvas",
     "phonoryx.ui.icons",
@@ -53,7 +56,22 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=["tkinter", "unittest", "test"],
+    excludes=[
+        "PyQt5",
+        "PyQt5.QtCore",
+        "PyQt5.QtGui",
+        "PyQt5.QtWidgets",
+        "PyQt6",
+        "PySide2",
+        "tkinter",
+        "unittest",
+        "test",
+        "IPython",
+        "matplotlib",
+        "sphinx",
+        "notebook",
+        "jupyter",
+    ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,

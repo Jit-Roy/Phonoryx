@@ -788,6 +788,48 @@ void test_slaved_clock_cadence_and_unusual_device_periods() {
     std::printf("[PASS] test_slaved_clock_cadence_and_unusual_device_periods (10ms=1bl, 20ms=2bl, 40ms=4bl, watchdog=100-140ms)\n");
 }
 
+void test_tts_node_and_audio_push() {
+    af::AudioEngine eng(48000, 480);
+    const char* graph = R"({
+        "nodes": [
+            { "id": 1, "type": 4, "device_id": "tts://realistic-air", "volume": 1.0 },
+            { "id": 2, "type": 101, "volume": 1.0 },
+            { "id": 3, "type": 201, "device_id": "test://out" }
+        ],
+        "connections": [
+            { "src_node": 1, "src_port": 0, "dst_node": 2, "dst_port": 0 },
+            { "src_node": 2, "src_port": 0, "dst_node": 3, "dst_port": 0 }
+        ]
+    })";
+    std::string err;
+    CHECK(eng.apply_graph_json(graph, err), "apply graph with TTS source node");
+
+    // Injected 960 frames (2 blocks) of known audio
+    std::vector<float> in_audio(960 * 2);
+    for (size_t i = 0; i < 960; ++i) {
+        in_audio[i * 2] = 0.42f;
+        in_audio[i * 2 + 1] = -0.42f;
+    }
+
+    int32_t pushed = eng.push_source_audio(1, in_audio.data(), 960);
+    CHECK(pushed == 960, "pushed exact 960 frames into TTS ring buffer");
+
+    // Process two blocks
+    eng.process_one_tick_for_test();
+    eng.process_one_tick_for_test();
+
+    std::vector<float> out_audio(960 * 2, 0.0f);
+    size_t popped = eng.test_pop_sink_audio(3, out_audio.data(), 960);
+    CHECK(popped == 960, "popped exact 960 frames from downstream test sink");
+    CHECK(std::abs(out_audio[0] - 0.42f) < 0.02f, "audio fidelity left channel");
+    CHECK(std::abs(out_audio[1] - (-0.42f)) < 0.02f, "audio fidelity right channel");
+
+    // Clear source audio
+    CHECK(eng.clear_source_audio(1), "clear_source_audio succeeds");
+
+    std::printf("[PASS] test_tts_node_and_audio_push\n");
+}
+
 } // namespace
 
 int main() {
@@ -807,6 +849,7 @@ int main() {
     test_parameter_sanitization_and_output_limiter();
     test_slaved_primary_output_clocking();
     test_slaved_clock_cadence_and_unusual_device_periods();
+    test_tts_node_and_audio_push();
 
     if (g_failures > 0) {
         std::fprintf(stderr, "Phonoryx C++ tests FAILED (%d failures)\n", g_failures);

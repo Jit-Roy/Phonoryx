@@ -89,7 +89,9 @@ NODE_ACCENT_COLORS = {
     NodeType.APP_CAPTURE: "#A071EE",      # Fluent Violet
     NodeType.SYSTEM_CAPTURE: "#00CCF9",   # Vivid Cyan
     NodeType.MIC_INPUT: "#32A6FF",        # Electric Azure
+    NodeType.TTS: "#B973D3",              # Orchid Purple
     NodeType.VIRTUAL_INPUT: "#7D7DF2",    # Iris Periwinkle
+    NodeType.AUDIO_PLAYER: "#E5C07B",     # Amber Gold
     NodeType.VOLUME: "#FFC114",           # OneNote Gold
     NodeType.GAIN: "#F6630D",             # Warm Orange
     NodeType.MIXER: "#B973D3",            # Orchid
