@@ -69,9 +69,11 @@ def build_lite() -> Path:
     print(" BUILDING PHONORYX LITE EDITION")
     print("=" * 60)
     spec_path = ROOT / "Phonoryx-Lite.spec"
-    dist_temp = ROOT / "dist" / "build_lite_tmp"
+    dist_target = ROOT / "dist" / "Phonoryx-Lite"
+    dist_temp = ROOT / "dist" / "tmp_lite"
     work_temp = ROOT / "build" / "Lite"
 
+    shutil.rmtree(dist_target, ignore_errors=True)
     shutil.rmtree(dist_temp, ignore_errors=True)
     shutil.rmtree(work_temp, ignore_errors=True)
 
@@ -86,15 +88,18 @@ def build_lite() -> Path:
     app_dir = dist_temp / "Phonoryx"
     clean_duplicate_dlls(app_dir)
 
-    # Archive to dist/Phonoryx-v2-windows-x64-lite.zip and dist/Phonoryx-v2-windows-x64.zip
-    zip_out = ROOT / "dist" / "Phonoryx-v2-windows-x64.zip"
-    zip_lite_named = ROOT / "dist" / "Phonoryx-v2-windows-x64-lite.zip"
-    create_zip(app_dir, zip_out)
-    shutil.copy2(zip_out, zip_lite_named)
-
-    # Clean up temp build folder
+    # Move into permanent dist/Phonoryx-Lite folder
+    shutil.move(str(app_dir), str(dist_target))
     shutil.rmtree(dist_temp, ignore_errors=True)
-    print(f"[COMPLETE] Phonoryx Lite packaged: {zip_out}")
+
+    # Archive to dist/Phonoryx-v2-windows-x64-lite.zip and dist/Phonoryx-v2-windows-x64.zip
+    zip_out = ROOT / "dist" / "Phonoryx-v2-windows-x64-lite.zip"
+    zip_release = ROOT / "dist" / "Phonoryx-v2-windows-x64.zip"
+    create_zip(dist_target, zip_out)
+    shutil.copy2(zip_out, zip_release)
+
+    print(f"[COMPLETE] Phonoryx Lite executable ready at: {dist_target / 'Phonoryx.exe'}")
+    print(f"[COMPLETE] Phonoryx Lite archive ready at:    {zip_out}")
     return zip_out
 
 
