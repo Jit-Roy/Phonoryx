@@ -195,6 +195,8 @@ class LeftPalettePanel(QWidget):
             h_item.setFont(font)
             self.palette_list.addItem(h_item)
             for nt, spec in NODE_SPECS.items():
+                if nt == NodeType.TTS:
+                    continue
                 if spec.category == cat:
                     it = QListWidgetItem(node_type_icon(nt, 16), f"  {spec.title}")
                     it.setData(Qt.ItemDataRole.UserRole, int(nt))
